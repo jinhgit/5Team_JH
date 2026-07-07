@@ -10,7 +10,7 @@
 ![Claude](https://img.shields.io/badge/Claude_API-D97757?style=for-the-badge)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge\&logo=typescript\&logoColor=white)
 
-** 2026 명지톤 AI 융합 해커톤**
+** 2026 명지톤 **
 
 *"연결을 넘어, 유대로"*
 
