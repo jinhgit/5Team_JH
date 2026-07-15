@@ -85,6 +85,11 @@ export default function Home() {
       .sort((a, b) => a.distanceKm - b.distanceKm)
   }, [center, db.fundings])
 
+  const nearbyRadiusKm = 5
+  const nearbyFundings = useMemo(() => {
+    return sorted.filter((f) => f.distanceKm <= nearbyRadiusKm)
+  }, [sorted])
+
   // 지도에는 항상 전체 펀딩이 다 보이도록 영역을 맞춘다 (하나라도 화면 밖으로 누락되지 않게)
   // mapInstance는 <Map>의 onCreate가 비동기로 호출된 뒤에야 채워지므로, state로 두어야
   // 맵이 준비된 시점에 이 effect가 다시 실행된다 (ref로는 재실행이 안 돼 마커 누락 버그가 났었음).
@@ -99,6 +104,8 @@ export default function Home() {
   const almostThere = sorted.find((f) => f.targetCount - currentCountOf(f) === 1)
   const selected = sorted.find((f) => f.id === selectedId)
   const showLoading = locating || kakaoLoading
+  const showMapError = !showLoading && !!kakaoError
+  const listItems = nearbyFundings.length > 0 ? nearbyFundings : sorted
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-white">
@@ -112,7 +119,7 @@ export default function Home() {
           {showLoading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--primary-tint)]">
               <p className="text-[13px] font-medium text-[var(--label)]">
-                {kakaoError ? '지도를 불러오지 못했어요' : '내 위치와 지도를 불러오는 중...'}
+                내 위치와 지도를 불러오는 중...
               </p>
             </div>
           )}
@@ -141,6 +148,15 @@ export default function Home() {
             </Map>
           )}
 
+          {showMapError && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[var(--primary-tint)] px-[24px] text-center">
+              <p className="text-[14px] font-semibold text-[var(--heading)]">카카오맵 SDK를 불러오지 못했습니다.</p>
+              <p className="mt-[6px] text-[12px] leading-[18px] text-[var(--label)]">
+                브라우저 설정이나 네트워크 차단으로 카카오 스크립트가 막히면 지도가 뜨지 않을 수 있어요. 잠시 후 다시 시도해 주세요.
+              </p>
+            </div>
+          )}
+
           <button
             type="button"
             aria-label="내 위치로 이동"
@@ -152,7 +168,7 @@ export default function Home() {
 
           {usingFallback && !showLoading && (
             <span className="absolute left-[17px] top-[13px] z-10 rounded-full bg-white/90 px-[11px] py-[5px] text-[11px] font-bold text-[var(--label)]">
-              데모 위치: 명지대 인문캠퍼스
+              기준 위치: 명지대 인문캠퍼스
             </span>
           )}
 
@@ -180,9 +196,14 @@ export default function Home() {
         </div>
 
         <div className="flex flex-col gap-[13px] px-[17px] pt-[13px] pb-[17px]">
-          <p className="text-[21px] font-bold text-[var(--heading)]">
-            내 주변 펀딩 {sorted.length > 0 && `(${sorted.length})`}
-          </p>
+          <div className="flex flex-col gap-[4px]">
+            <p className="text-[21px] font-bold text-[var(--heading)]">
+              내 주변 펀딩 {listItems.length > 0 ? `(${listItems.length})` : ''}
+            </p>
+            <p className="text-[12px] text-[var(--label)]">
+              내 위치 기준 {nearbyRadiusKm}km 이내 펀딩을 가까운 순으로 정렬해 보여줍니다.
+            </p>
+          </div>
 
           {almostThere && (
             <div className="flex items-center gap-[11px] rounded-[4px] border border-[var(--primary-deep)] bg-[var(--primary-tint)] px-[15px] py-[13px]">
@@ -193,13 +214,19 @@ export default function Home() {
             </div>
           )}
 
-          {sorted.length === 0 && (
+          {listItems.length === 0 && (
             <p className="py-[24px] text-center text-[14px] text-[var(--border)]">
               아직 진행 중인 펀딩이 없어요
             </p>
           )}
 
-          {sorted.map((g) => {
+          {nearbyFundings.length === 0 && sorted.length > 0 && (
+            <p className="text-[13px] text-[var(--label)]">
+              {nearbyRadiusKm}km 안에는 아직 펀딩이 없어서, 가까운 순으로 전체 펀딩을 보여드려요.
+            </p>
+          )}
+
+          {listItems.map((g) => {
             const current = currentCountOf(g)
             return (
               <GigCard

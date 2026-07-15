@@ -6,6 +6,9 @@ import { patchDraft } from '../../store/signupDraft'
 
 type Mode = 'login' | 'signup'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080'
+const SCHOOL_EMAIL_RE = /^[A-Za-z0-9._%+\-]+@([A-Za-z0-9-]+\.)+ac\.kr$/i
+
 export default function Login() {
   const navigate = useNavigate()
   const [mode, setMode] = useState<Mode>('login')
@@ -17,6 +20,8 @@ export default function Login() {
   const [signupEmail, setSignupEmail] = useState('')
   const [code, setCode] = useState('')
   const [signupError, setSignupError] = useState('')
+  const [verificationMessage, setVerificationMessage] = useState('')
+  const [sendingCode, setSendingCode] = useState(false)
 
   function handleLogin() {
     if (loginWithPassword(email, password)) {
@@ -31,14 +36,82 @@ export default function Login() {
     navigate('/')
   }
 
-  function handleVerify() {
-    if (isEmailTaken(signupEmail)) {
+  function isSchoolEmail(value: string) {
+    return SCHOOL_EMAIL_RE.test(value.trim())
+  }
+
+  async function handleSendCode() {
+    const normalizedEmail = signupEmail.trim().toLowerCase()
+    if (!normalizedEmail) {
+      setSignupError('학교 이메일을 입력해주세요.')
+      return
+    }
+    if (!isSchoolEmail(normalizedEmail)) {
+      setSignupError('학교 이메일 형식만 사용할 수 있어요. 예: example@mju.ac.kr')
+      return
+    }
+    if (isEmailTaken(normalizedEmail)) {
       setSignupError('이미 가입된 이메일이에요. 로그인 탭을 이용해주세요.')
       return
     }
+
     setSignupError('')
-    patchDraft({ email: signupEmail })
-    navigate('/signup/password')
+    setVerificationMessage('')
+    setSendingCode(true)
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/send-verification-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail }),
+      })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(payload?.message ?? '인증번호 전송에 실패했어요.')
+      }
+
+      const detail = payload?.code ? ` 테스트 모드에서는 인증번호 ${payload.code} 를 입력할 수 있어요.` : ''
+      setVerificationMessage(`${payload?.message ?? '인증번호를 발송했어요.'}${detail}`)
+    } catch (error) {
+      setSignupError(error instanceof Error ? error.message : '인증번호 전송에 실패했어요.')
+    } finally {
+      setSendingCode(false)
+    }
+  }
+
+  async function handleVerify() {
+    const normalizedEmail = signupEmail.trim().toLowerCase()
+    if (!normalizedEmail || !isSchoolEmail(normalizedEmail)) {
+      setSignupError('학교 이메일 형식만 사용할 수 있어요. 예: example@mju.ac.kr')
+      return
+    }
+    if (!code.trim()) {
+      setSignupError('인증번호를 입력해주세요.')
+      return
+    }
+    if (isEmailTaken(normalizedEmail)) {
+      setSignupError('이미 가입된 이메일이에요. 로그인 탭을 이용해주세요.')
+      return
+    }
+
+    setSignupError('')
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/verify-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail, code: code.trim() }),
+      })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok || !payload?.verified) {
+        throw new Error(payload?.message ?? '인증번호가 올바르지 않아요.')
+      }
+
+      patchDraft({ email: normalizedEmail })
+      navigate('/signup/password')
+    } catch (error) {
+      setSignupError(error instanceof Error ? error.message : '인증에 실패했어요.')
+    }
   }
 
   return (
@@ -162,13 +235,19 @@ export default function Login() {
             />
             <button
               type="button"
-              className="shrink-0 rounded-[4px] border border-[var(--border)] px-[12px] py-[10px] text-[13px] font-medium text-[var(--heading)]"
+              onClick={handleSendCode}
+              disabled={sendingCode || !isSchoolEmail(signupEmail)}
+              className="shrink-0 rounded-[4px] border border-[var(--border)] px-[12px] py-[10px] text-[13px] font-medium text-[var(--heading)] disabled:opacity-40"
             >
-              인증번호 받기
+              {sendingCode ? '전송 중...' : '인증번호 받기'}
             </button>
           </div>
 
           <div className="h-[28px]" />
+
+          {verificationMessage && <p className="text-[12px] font-medium text-[var(--primary-deep)]">{verificationMessage}</p>}
+
+          <div className="h-[12px]" />
 
           <p className="text-[14px] font-bold text-[var(--heading)]">인증번호</p>
           <div className="h-[8px]" />
@@ -187,13 +266,14 @@ export default function Login() {
             </div>
             <button
               type="button"
+              onClick={handleVerify}
               className="shrink-0 rounded-[4px] border border-[var(--border)] px-[12px] py-[10px] text-[13px] font-medium text-[var(--heading)]"
             >
               확인
             </button>
           </div>
           <p className="pt-[6px] text-[11px] text-[var(--border)]">
-            데모에서는 아무 6자리 숫자나 입력하고 다음으로 진행할 수 있어요
+            인증번호 받기 버튼으로 발송된 숫자를 입력한 뒤 확인해주세요.
           </p>
           {signupError && <p className="pt-[6px] text-[12px] font-medium text-[var(--red)]">{signupError}</p>}
 
@@ -201,7 +281,7 @@ export default function Login() {
 
           <button
             type="button"
-            disabled={!signupEmail.includes('@')}
+            disabled={!signupEmail.trim() || !isSchoolEmail(signupEmail) || !code.trim()}
             onClick={handleVerify}
             className="flex h-[52px] w-full items-center justify-center rounded-[4px] bg-[var(--primary)] disabled:opacity-40"
           >

@@ -6,8 +6,11 @@ import { useKakaoLoader } from 'react-kakao-maps-sdk'
  * 먼저 마운트된 컴포넌트의 옵션만 적용되므로 반드시 이 훅을 통해서만 로드해야 한다.
  */
 export function useKakao() {
+  const kakaoMapKey = import.meta.env.VITE_KAKAO_MAP_KEY?.trim() || ''
+
   return useKakaoLoader({
-    appkey: import.meta.env.VITE_KAKAO_MAP_KEY,
+    appkey: kakaoMapKey,
     libraries: ['services'],
+    url: 'https://dapi.kakao.com/v2/maps/sdk.js',
   })
 }
