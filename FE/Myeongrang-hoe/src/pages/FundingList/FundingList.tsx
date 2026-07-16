@@ -1,13 +1,35 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import BottomNav from '../../components/BottomNav'
 import GigCard from '../../components/GigCard'
 import PageHeader from '../../components/PageHeader'
 import { useDB } from '../../store/db'
-import { currentCountOf, getUser, isExpired, participantNamesOf } from '../../store/actions'
+import {
+  currentCountOf,
+  getUser,
+  isExpired,
+  participantNamesOf,
+  syncFundingsFromServer,
+} from '../../store/actions'
+import { CAMPUS_CENTER } from '../../store/schema'
 
 export default function FundingList() {
   const db = useDB()
   const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    void syncFundingsFromServer({
+      lat: CAMPUS_CENTER.lat,
+      lng: CAMPUS_CENTER.lng,
+      radiusKm: 100,
+    }).finally(() => {
+      if (!cancelled) setLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const filtered = db.fundings.filter(
     (g) =>
@@ -32,6 +54,17 @@ export default function FundingList() {
           </div>
 
           <p className="text-[21px] font-bold text-[var(--heading)]">모든 약속</p>
+
+          {loading && filtered.length === 0 && (
+            <p className="py-[24px] text-center text-[14px] text-[var(--border)]">불러오는 중...</p>
+          )}
+
+          {!loading && filtered.length === 0 && (
+            <p className="py-[24px] text-center text-[14px] text-[var(--border)]">
+              {search ? '검색 결과가 없어요' : '아직 등록된 펀딩이 없어요'}
+            </p>
+          )}
+
           {filtered.map((g) => {
             const current = currentCountOf(g)
             return (
@@ -57,11 +90,6 @@ export default function FundingList() {
               />
             )
           })}
-          {filtered.length === 0 && (
-            <p className="pt-[24px] text-center text-[14px] text-[var(--border)]">
-              검색 결과가 없어요
-            </p>
-          )}
         </div>
       </main>
 

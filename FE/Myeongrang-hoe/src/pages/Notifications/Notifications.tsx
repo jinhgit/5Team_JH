@@ -1,9 +1,15 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import BackButton from '../../components/BackButton'
 import { useDB } from '../../store/db'
-import { getCurrentUser, markNotificationsSeen } from '../../store/actions'
+import {
+  getCurrentUser,
+  markNotificationsSeen,
+  syncFundingsFromServer,
+  syncMeFromServer,
+} from '../../store/actions'
 import { computeNotifications } from '../../store/notifications'
+import { CAMPUS_CENTER } from '../../store/schema'
 
 function timeAgo(ts: number): string {
   const diffMin = Math.floor((Date.now() - ts) / 60000)
@@ -19,11 +25,28 @@ export default function Notifications() {
   useDB()
   const me = getCurrentUser()
   const notifications = me ? computeNotifications(me.email) : []
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (me) markNotificationsSeen(me.email)
+    let cancelled = false
+    void (async () => {
+      await syncMeFromServer()
+      await syncFundingsFromServer({
+        lat: CAMPUS_CENTER.lat,
+        lng: CAMPUS_CENTER.lng,
+        radiusKm: 50,
+      })
+      if (!cancelled) setLoading(false)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (me && !loading) markNotificationsSeen(me.email)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [me?.email])
+  }, [me?.email, loading])
 
   return (
     <div className="relative flex min-h-screen flex-col bg-white">
@@ -36,7 +59,11 @@ export default function Notifications() {
       </header>
 
       <main className="flex-1 overflow-y-auto">
-        {notifications.length === 0 && (
+        {loading && notifications.length === 0 && (
+          <p className="py-[40px] text-center text-[14px] text-[var(--border)]">불러오는 중...</p>
+        )}
+
+        {!loading && notifications.length === 0 && (
           <p className="py-[40px] text-center text-[14px] text-[var(--border)]">
             아직 알림이 없어요
           </p>

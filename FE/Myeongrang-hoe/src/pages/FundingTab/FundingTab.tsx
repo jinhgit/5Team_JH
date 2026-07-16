@@ -18,6 +18,7 @@ import {
   isParticipant,
   isWishlisted,
   joinFunding,
+  leaveFunding,
   syncFundingDetail,
   toggleWishlist,
 } from '../../store/actions'
@@ -94,6 +95,11 @@ export default function FundingTab() {
   const wishlisted = !!me && isWishlisted(me.email, funding.id)
   const comments = commentsOf(funding.id)
   const iAmHost = !!me && isHost(funding, me.email)
+
+  function handleLeave() {
+    if (!me || iAmHost) return
+    leaveFunding(funding.id, me.email)
+  }
 
   const infoRows = [
     { label: '일시', value: funding.meetTimeText },
@@ -318,38 +324,60 @@ export default function FundingTab() {
         </div>
       </main>
 
-      <div className="flex shrink-0 items-center gap-[10px] border-t border-[var(--hairline)] px-[17px] py-[13px]">
-        {joined ? (
-          <>
-            <button
-              type="button"
-              onClick={() => navigate(`/chat/${funding.id}`)}
-              className="flex h-[56px] flex-1 items-center justify-center rounded-[4px] bg-[var(--primary)]"
-            >
-              <span className="text-[17px] font-medium text-[var(--on-primary)]">채팅방 입장하기</span>
-            </button>
-            {matched && (
-              <button
-                type="button"
-                onClick={() => navigate(`/review/new/${funding.id}`)}
-                className="flex h-[56px] flex-1 items-center justify-center rounded-[4px] border border-[var(--primary-deep)]"
-              >
-                <span className="text-[17px] font-medium text-[var(--primary-deep)]">후기 작성하기</span>
-              </button>
-            )}
-          </>
-        ) : (
+      <div className="flex shrink-0 flex-col gap-[8px] border-t border-[var(--hairline)] px-[17px] py-[13px]">
+        {iAmHost && !matched && !expired && current >= 2 && (
           <button
             type="button"
-            onClick={handleJoin}
-            disabled={matched || expired}
-            className="flex h-[56px] flex-1 items-center justify-center rounded-[4px] bg-[var(--primary)] disabled:opacity-40"
+            onClick={handleConfirm}
+            className="flex h-[44px] w-full items-center justify-center rounded-[4px] border border-[var(--primary-deep)]"
           >
-            <span className="text-[17px] font-medium text-[var(--on-primary)]">
-              {matched ? '모집이 마감됐어요' : expired ? '모집 기간이 지났어요' : '펀딩 참여하기'}
+            <span className="text-[14px] font-bold text-[var(--primary-deep)]">
+              현재 인원({current}명)으로 모집 확정
             </span>
           </button>
         )}
+        <div className="flex items-center gap-[10px]">
+          {joined ? (
+            <>
+              <button
+                type="button"
+                onClick={() => navigate(`/chat/${funding.id}`)}
+                className="flex h-[56px] flex-1 items-center justify-center rounded-[4px] bg-[var(--primary)]"
+              >
+                <span className="text-[17px] font-medium text-[var(--on-primary)]">채팅방 입장하기</span>
+              </button>
+              {matched && (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/review/new/${funding.id}`)}
+                  className="flex h-[56px] flex-1 items-center justify-center rounded-[4px] border border-[var(--primary-deep)]"
+                >
+                  <span className="text-[17px] font-medium text-[var(--primary-deep)]">후기 작성하기</span>
+                </button>
+              )}
+              {!iAmHost && !matched && (
+                <button
+                  type="button"
+                  onClick={handleLeave}
+                  className="flex h-[56px] shrink-0 items-center justify-center rounded-[4px] border border-[var(--border)] px-[14px]"
+                >
+                  <span className="text-[14px] font-medium text-[var(--label)]">취소</span>
+                </button>
+              )}
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={handleJoin}
+              disabled={matched || expired}
+              className="flex h-[56px] flex-1 items-center justify-center rounded-[4px] bg-[var(--primary)] disabled:opacity-40"
+            >
+              <span className="text-[17px] font-medium text-[var(--on-primary)]">
+                {matched ? '모집이 마감됐어요' : expired ? '모집 기간이 지났어요' : '펀딩 참여하기'}
+              </span>
+            </button>
+          )}
+        </div>
       </div>
 
       {showHostDetail && (

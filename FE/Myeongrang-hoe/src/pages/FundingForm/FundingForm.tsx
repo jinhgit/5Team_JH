@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import LocationSearch, { type SelectedPlace } from '../../components/LocationSearch'
-import { createFunding, getCurrentUser, getFunding, isHost, updateFunding } from '../../store/actions'
+import {
+  createFundingAsync,
+  getCurrentUser,
+  getFunding,
+  isHost,
+  syncFundingDetail,
+  updateFundingAsync,
+} from '../../store/actions'
+import { setGlobalLoading } from '../../store/ui'
 
 const categories = ['맛집', '교류', '산책', '스터디', '스포츠', '봉사']
 
@@ -104,6 +112,13 @@ export default function FundingForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [forbidden])
 
+  useEffect(() => {
+    const numId = Number(id)
+    if (editing && Number.isFinite(numId) && numId > 0) {
+      void syncFundingDetail(numId)
+    }
+  }, [editing, id])
+
   const [title, setTitle] = useState(existing?.title ?? '')
   const [content, setContent] = useState(existing?.description ?? '')
   const [category, setCategory] = useState(existing?.category ?? categories[0])
@@ -121,8 +136,9 @@ export default function FundingForm() {
   const minHeadcount = existing ? Math.max(2, existing.participants.length) : 2
 
   const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
-  const canSubmit = !!me && title.trim().length > 0 && !!place?.name && !error
+  const canSubmit = !!me && title.trim().length > 0 && !!place?.name && !error && !submitting
 
   function handleDateChange(nextDate: string) {
     setDate(nextDate)
@@ -139,8 +155,8 @@ export default function FundingForm() {
     setError(computeScheduleError(date, time, nextDeadline))
   }
 
-  function handleSubmit() {
-    if (!me || !canSubmit || !place) return
+  async function handleSubmit() {
+    if (!me || !canSubmit || !place || submitting) return
     const scheduleError = computeScheduleError(date, time, deadline)
     if (scheduleError) {
       setError(scheduleError)
@@ -162,12 +178,21 @@ export default function FundingForm() {
       fee,
     }
 
-    if (editing && existing) {
-      updateFunding(existing.id, input)
-      navigate(`/funding/${existing.id}`, { replace: true })
-    } else {
-      createFunding({ ...input, hostEmail: me.email })
-      navigate('/myposts', { replace: true })
+    setSubmitting(true)
+    setGlobalLoading(true, editing ? '수정 중...' : '펀딩 만드는 중...')
+    try {
+      if (editing && existing) {
+        await updateFundingAsync(existing.id, input)
+        navigate(`/funding/${existing.id}`, { replace: true })
+      } else {
+        const newId = await createFundingAsync({ ...input, hostEmail: me.email })
+        navigate(`/funding/${newId}`, { replace: true })
+      }
+    } catch {
+      // 토스트는 actions에서 처리
+    } finally {
+      setSubmitting(false)
+      setGlobalLoading(false)
     }
   }
 
@@ -316,11 +341,17 @@ export default function FundingForm() {
         <button
           type="button"
           disabled={!canSubmit}
-          onClick={handleSubmit}
+          onClick={() => void handleSubmit()}
           className="flex h-[52px] flex-1 items-center justify-center rounded-[4px] bg-[var(--primary)] disabled:opacity-40"
         >
           <span className="text-[16px] font-medium text-[var(--on-primary)]">
-            {editing ? '수정 완료' : '펀딩 만들기'}
+            {submitting
+              ? editing
+                ? '수정 중...'
+                : '만드는 중...'
+              : editing
+                ? '수정 완료'
+                : '펀딩 만들기'}
           </span>
         </button>
       </div>

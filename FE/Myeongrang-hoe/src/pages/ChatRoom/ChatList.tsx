@@ -1,20 +1,48 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import BottomNav from '../../components/BottomNav'
 import PageHeader from '../../components/PageHeader'
 import { useDB } from '../../store/db'
-import { chatMessagesOf, currentCountOf, fundingsOf, getCurrentUser, getUser } from '../../store/actions'
+import {
+  chatMessagesOf,
+  currentCountOf,
+  fundingsOf,
+  getCurrentUser,
+  getUser,
+  syncFundingsFromServer,
+} from '../../store/actions'
+import { CAMPUS_CENTER } from '../../store/schema'
 
 export default function ChatList() {
   useDB()
   const me = getCurrentUser()
   const rooms = me ? fundingsOf(me.email) : []
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    void syncFundingsFromServer({
+      lat: CAMPUS_CENTER.lat,
+      lng: CAMPUS_CENTER.lng,
+      radiusKm: 100,
+    }).finally(() => {
+      if (!cancelled) setLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-white">
       <PageHeader title="채팅" />
 
       <main className="flex-1 overflow-y-auto">
-        {rooms.length === 0 && (
+        {loading && rooms.length === 0 && (
+          <p className="py-[40px] text-center text-[14px] text-[var(--border)]">불러오는 중...</p>
+        )}
+
+        {!loading && rooms.length === 0 && (
           <p className="py-[40px] text-center text-[14px] text-[var(--border)]">
             펀딩을 만들거나 참여하면 채팅방이 자동으로 열려요
           </p>
@@ -23,7 +51,8 @@ export default function ChatList() {
         {rooms.map((r) => {
           const messages = chatMessagesOf(r.id)
           const last = messages[messages.length - 1]
-          const lastAuthor = last && last.authorEmail !== 'system' ? getUser(last.authorEmail)?.name : null
+          const lastAuthor =
+            last && last.authorEmail !== 'system' ? getUser(last.authorEmail)?.name : null
           return (
             <Link
               key={r.id}
@@ -39,7 +68,9 @@ export default function ChatList() {
                   </span>
                 </div>
                 <p className="truncate text-[13px] text-[var(--label)]">
-                  {last ? `${lastAuthor ? `${lastAuthor}: ` : ''}${last.content}` : '채팅방이 개설됐어요'}
+                  {last
+                    ? `${lastAuthor ? `${lastAuthor}: ` : ''}${last.content}`
+                    : '채팅방이 개설됐어요'}
                 </p>
               </div>
             </Link>

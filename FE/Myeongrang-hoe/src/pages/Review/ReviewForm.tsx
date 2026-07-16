@@ -1,9 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import BackButton from '../../components/BackButton'
 import participantAvatar from '../../assets/fundingtab/participant-avatar.svg'
 import { useDB } from '../../store/db'
-import { CHECKLIST_ITEMS, getCurrentUser, getFunding, otherParticipants, submitReview } from '../../store/actions'
+import {
+  CHECKLIST_ITEMS,
+  getCurrentUser,
+  getFunding,
+  otherParticipants,
+  submitReview,
+  syncFundingDetail,
+} from '../../store/actions'
+import { showToast } from '../../store/ui'
 
 type TargetState = {
   noShow: boolean
@@ -27,6 +35,30 @@ export default function ReviewForm() {
   const [state, setState] = useState<Record<string, TargetState>>(
     Object.fromEntries(targets.map((t) => [t.email, emptyState()])),
   )
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    const numId = Number(fundingId)
+    if (Number.isFinite(numId) && numId > 0) {
+      void syncFundingDetail(numId)
+    }
+  }, [fundingId])
+
+  // 서버 동기화 후 참여자 목록이 채워지면 상태 초기화
+  useEffect(() => {
+    if (targets.length === 0) return
+    setState((prev) => {
+      const next = { ...prev }
+      for (const t of targets) {
+        if (!next[t.email]) next[t.email] = emptyState()
+      }
+      return next
+    })
+    if (!activeEmail || !targets.some((t) => t.email === activeEmail)) {
+      setActiveEmail(targets[0].email)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targets.map((t) => t.email).join(',')])
 
   const active = state[activeEmail]
   const completedCount = Object.values(state).filter((s) => s.noShow || s.checked.length > 0).length
@@ -50,17 +82,27 @@ export default function ReviewForm() {
   }
 
   function handleSubmitAll() {
-    if (!me) return
-    targets.forEach((t) => {
-      const s = state[t.email]
-      if (!s) return
-      if (s.noShow) {
-        submitReview(funding.id, me.email, t.email, [], '', true)
-      } else if (s.checked.length > 0 || s.comment.trim()) {
-        submitReview(funding.id, me.email, t.email, s.checked, s.comment.trim())
-      }
-    })
-    navigate('/mypage')
+    if (!me || submitting) return
+    if (completedCount === 0) {
+      showToast('최소 한 명에게 후기를 남겨주세요', 'error')
+      return
+    }
+    setSubmitting(true)
+    try {
+      targets.forEach((t) => {
+        const s = state[t.email]
+        if (!s) return
+        if (s.noShow) {
+          submitReview(funding.id, me.email, t.email, [], '', true)
+        } else if (s.checked.length > 0 || s.comment.trim()) {
+          submitReview(funding.id, me.email, t.email, s.checked, s.comment.trim())
+        }
+      })
+      showToast('후기를 저장했어요', 'success')
+      navigate('/mypage')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   if (targets.length === 0) {

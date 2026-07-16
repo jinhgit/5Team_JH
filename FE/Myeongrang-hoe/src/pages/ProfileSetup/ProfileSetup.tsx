@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import avatarPlaceholder from '../../assets/profilesetup/avatar-placeholder.svg'
 import avatarUploadBtn from '../../assets/profilesetup/avatar-upload-btn.svg'
 import { getCurrentUser, updateProfile } from '../../store/actions'
+import { showToast } from '../../store/ui'
 import { patchDraft } from '../../store/signupDraft'
 import type { Campus } from '../../store/schema'
 
@@ -15,16 +16,33 @@ export default function ProfileSetup({ mode = 'signup' }: { mode?: 'signup' | 'e
   const [major, setMajor] = useState(editingUser?.major ?? '')
   const [age, setAge] = useState(editingUser?.age ?? '')
   const [bio, setBio] = useState(editingUser?.bio ?? '')
+  const [saving, setSaving] = useState(false)
 
   function handleSubmit() {
     if (mode === 'edit') {
-      if (editingUser) {
-        updateProfile(editingUser.email, { name, campus, major, age, bio })
+      if (!editingUser) return
+      if (!name.trim()) {
+        showToast('이름을 입력해주세요', 'error')
+        return
       }
+      setSaving(true)
+      updateProfile(editingUser.email, {
+        name: name.trim(),
+        campus,
+        major,
+        age,
+        bio,
+      })
+      showToast('프로필을 저장했어요', 'success')
+      setSaving(false)
       navigate('/mypage')
       return
     }
-    patchDraft({ name, campus, major, age, bio })
+    if (!name.trim()) {
+      showToast('이름을 입력해주세요', 'error')
+      return
+    }
+    patchDraft({ name: name.trim(), campus, major, age, bio })
     navigate('/signup/interests')
   }
 
@@ -126,10 +144,11 @@ export default function ProfileSetup({ mode = 'signup' }: { mode?: 'signup' | 'e
       <button
         type="button"
         onClick={handleSubmit}
-        className="flex h-[52px] w-full items-center justify-center rounded-[4px] bg-[var(--primary)]"
+        disabled={saving}
+        className="flex h-[52px] w-full items-center justify-center rounded-[4px] bg-[var(--primary)] disabled:opacity-40"
       >
         <span className="text-[16px] font-medium text-[var(--on-primary)]">
-          {mode === 'edit' ? '저장하기' : '다음'}
+          {saving ? '저장 중...' : mode === 'edit' ? '저장하기' : '다음'}
         </span>
       </button>
     </div>

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { applyServerUser, loginAsTestAccount, loginWithPassword } from '../../store/actions'
 import { loginWithApi, sendVerificationCode, setAccessToken, verifyEmailCode } from '../../lib/api'
+import { showToast } from '../../store/ui'
 import { TEST_ACCOUNTS } from '../../store/schema'
 import { patchDraft } from '../../store/signupDraft'
 
@@ -37,11 +38,13 @@ export default function Login() {
     try {
       const { user } = await loginWithApi(normalizedEmail, password)
       applyServerUser(user, { password, setCurrent: true })
+      showToast('로그인했어요', 'success')
       navigate('/')
     } catch (error) {
       // Fallback: local seed accounts when backend is offline
       if (loginWithPassword(normalizedEmail, password)) {
         setAccessToken(null)
+        showToast('오프라인 모드로 로그인했어요', 'info')
         navigate('/')
         return
       }
@@ -54,6 +57,7 @@ export default function Login() {
   function handleTestLogin(key: keyof typeof TEST_ACCOUNTS) {
     setAccessToken(null)
     loginAsTestAccount(TEST_ACCOUNTS[key])
+    showToast('로컬 테스트 계정으로 입장했어요 (서버 미연동)', 'info')
     navigate('/')
   }
 

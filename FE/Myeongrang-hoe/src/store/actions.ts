@@ -14,6 +14,7 @@ import {
   joinFundingApi,
   leaveFundingApi,
   sendChatApi,
+  setAccessToken,
   submitReviewApi,
   toggleWishlistApi,
   updateFundingApi,
@@ -21,9 +22,11 @@ import {
   updateProfileApi,
   type ApiFunding,
   type ApiUser,
+  type FundingInputBody,
 } from '../lib/api'
 import { getDB, mutate } from './db'
 import { CHECKLIST_ITEMS, type FundingRecord, type RiskLevel, type UserRecord } from './schema'
+import { showToast } from './ui'
 
 export { CHECKLIST_ITEMS }
 
@@ -207,11 +210,8 @@ export function logout() {
   mutate((d) => {
     d.currentUserEmail = null
   })
-  try {
-    localStorage.removeItem('mh_access_token')
-  } catch {
-    // ignore
-  }
+  setAccessToken(null)
+  showToast('로그아웃했어요', 'info')
 }
 
 export function isEmailTaken(email: string): boolean {
@@ -472,9 +472,12 @@ export function joinFunding(fundingId: number, email: string) {
 
   if (getAccessToken()) {
     void joinFundingApi(fundingId)
-      .then((api) => upsertLocalFunding(mapApiFunding(api)))
-      .catch(() => {
-        // keep optimistic local state
+      .then((api) => {
+        upsertLocalFunding(mapApiFunding(api))
+        showToast('펀딩에 참여했어요', 'success')
+      })
+      .catch((e) => {
+        showToast(e instanceof Error ? e.message : '참여에 실패했어요', 'error')
       })
   }
 }
@@ -487,8 +490,13 @@ export function leaveFunding(fundingId: number, email: string) {
   })
   if (getAccessToken()) {
     void leaveFundingApi(fundingId)
-      .then((api) => upsertLocalFunding(mapApiFunding(api)))
-      .catch(() => {})
+      .then((api) => {
+        upsertLocalFunding(mapApiFunding(api))
+        showToast('참여를 취소했어요', 'info')
+      })
+      .catch((e) => {
+        showToast(e instanceof Error ? e.message : '참여 취소에 실패했어요', 'error')
+      })
   }
 }
 
@@ -508,7 +516,42 @@ interface FundingInput {
   fee: number
 }
 
-export function createFunding(input: FundingInput & { hostEmail: string }): number {
+function toFundingBody(input: FundingInput): FundingInputBody {
+  return {
+    category: input.category,
+    title: input.title,
+    description: input.description,
+    address: input.address,
+    locationName: input.locationName,
+    lat: input.lat,
+    lng: input.lng,
+    meetAt: input.meetAt,
+    meetTimeText: input.meetTimeText,
+    deadlineAt: input.deadlineAt,
+    deadlineText: input.deadlineText,
+    targetCount: input.targetCount,
+    fee: input.fee,
+  }
+}
+
+/** 서버 우선 생성. 성공 시 서버 id 반환. 실패 시 로컬 id 또는 throw */
+export async function createFundingAsync(
+  input: FundingInput & { hostEmail: string },
+): Promise<number> {
+  if (getAccessToken()) {
+    try {
+      const api = await createFundingApi(toFundingBody(input))
+      upsertLocalFunding(mapApiFunding(api))
+      showToast('펀딩을 만들었어요', 'success')
+      return api.id
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '펀딩 생성에 실패했어요'
+      showToast(msg, 'error')
+      throw e
+    }
+  }
+
+  // 오프라인: 로컬만
   let newId = 0
   mutate((d) => {
     newId = d.nextFundingId++
@@ -541,14 +584,21 @@ export function createFunding(input: FundingInput & { hostEmail: string }): numb
       createdAt: Date.now(),
     })
   })
+  showToast('오프라인 모드로 로컬에 저장했어요', 'info')
+  return newId
+}
 
-  if (getAccessToken()) {
-    void createFundingApi({
+export function createFunding(input: FundingInput & { hostEmail: string }): number {
+  // 하위 호환: 비동기 결과를 기다리지 않음 — 폼에서는 createFundingAsync 사용 권장
+  let newId = 0
+  mutate((d) => {
+    newId = d.nextFundingId++
+    d.fundings.unshift({
+      id: newId,
       category: input.category,
       title: input.title,
-      description: input.description,
-      address: input.address,
       locationName: input.locationName,
+      address: input.address,
       lat: input.lat,
       lng: input.lng,
       meetAt: input.meetAt,
@@ -557,23 +607,47 @@ export function createFunding(input: FundingInput & { hostEmail: string }): numb
       deadlineText: input.deadlineText,
       targetCount: input.targetCount,
       fee: input.fee,
+      fillerParticipants: 0,
+      participants: [input.hostEmail],
+      description: input.description,
+      hostEmail: input.hostEmail,
+      aiRisk: '낮음',
+      createdAt: Date.now(),
     })
+  })
+  if (getAccessToken()) {
+    void createFundingApi(toFundingBody(input))
       .then((api) => {
         mutate((d) => {
           d.fundings = d.fundings.filter((f) => f.id !== newId)
         })
         upsertLocalFunding(mapApiFunding(api))
-        newId = api.id
       })
-      .catch(() => {
-        // keep local draft funding
+      .catch((e) => {
+        showToast(e instanceof Error ? e.message : '펀딩 생성에 실패했어요', 'error')
       })
   }
-
   return newId
 }
 
-export function updateFunding(fundingId: number, input: FundingInput) {
+export async function updateFundingAsync(fundingId: number, input: FundingInput): Promise<void> {
+  if (getAccessToken()) {
+    try {
+      const api = await updateFundingApi(fundingId, toFundingBody(input))
+      upsertLocalFunding(mapApiFunding(api))
+      showToast('펀딩을 수정했어요', 'success')
+      return
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '펀딩 수정에 실패했어요'
+      showToast(msg, 'error')
+      throw e
+    }
+  }
+  updateFundingLocalOnly(fundingId, input)
+  showToast('오프라인 모드로 로컬에 저장했어요', 'info')
+}
+
+function updateFundingLocalOnly(fundingId: number, input: FundingInput) {
   mutate((d) => {
     const f = d.fundings.find((x) => x.id === fundingId)
     if (!f) return
@@ -592,10 +666,16 @@ export function updateFunding(fundingId: number, input: FundingInput) {
     f.targetCount = Math.max(input.targetCount, minTarget)
     f.fee = input.fee
   })
+}
+
+export function updateFunding(fundingId: number, input: FundingInput) {
+  updateFundingLocalOnly(fundingId, input)
   if (getAccessToken()) {
-    void updateFundingApi(fundingId, input)
+    void updateFundingApi(fundingId, toFundingBody(input))
       .then((api) => upsertLocalFunding(mapApiFunding(api)))
-      .catch(() => {})
+      .catch((e) => {
+        showToast(e instanceof Error ? e.message : '펀딩 수정에 실패했어요', 'error')
+      })
   }
 }
 
@@ -610,8 +690,13 @@ export function confirmFunding(fundingId: number) {
   })
   if (getAccessToken()) {
     void confirmFundingApi(fundingId)
-      .then((api) => upsertLocalFunding(mapApiFunding(api)))
-      .catch(() => {})
+      .then((api) => {
+        upsertLocalFunding(mapApiFunding(api))
+        showToast('모집을 확정했어요', 'success')
+      })
+      .catch((e) => {
+        showToast(e instanceof Error ? e.message : '모집 확정에 실패했어요', 'error')
+      })
   }
 }
 
