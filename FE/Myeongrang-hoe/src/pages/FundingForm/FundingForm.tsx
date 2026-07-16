@@ -1,9 +1,19 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import LocationSearch, { type SelectedPlace } from '../../components/LocationSearch'
-import { createFunding, getCurrentUser, getFunding, isHost, updateFunding } from '../../store/actions'
+import {
+  createFundingAsync,
+  getCurrentUser,
+  getFunding,
+  isHost,
+  syncFundingDetail,
+  updateFundingAsync,
+} from '../../store/actions'
+import { setGlobalLoading, showToast } from '../../store/ui'
+import { getAccessToken, uploadImageApi } from '../../lib/api'
 
-const categories = ['맛집', '교류', '산책', '스터디', '스포츠', '봉사']
+const categories = ['맛집', '교류', '산책', '스터디', '스포츠', '봉사', '쇼핑']
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024 // 2MB
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -104,6 +114,13 @@ export default function FundingForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [forbidden])
 
+  useEffect(() => {
+    const numId = Number(id)
+    if (editing && Number.isFinite(numId) && numId > 0) {
+      void syncFundingDetail(numId)
+    }
+  }, [editing, id])
+
   const [title, setTitle] = useState(existing?.title ?? '')
   const [content, setContent] = useState(existing?.description ?? '')
   const [category, setCategory] = useState(existing?.category ?? categories[0])
@@ -117,12 +134,18 @@ export default function FundingForm() {
   const [headcount, setHeadcount] = useState(existing?.targetCount ?? 4)
   const [deadline, setDeadline] = useState(existing ? isoToDatetimeLocalInput(existing.deadlineAt) : '')
   const [fee, setFee] = useState(existing?.fee ?? 0)
+  const [coverImage, setCoverImage] = useState(existing?.coverImage ?? '')
 
   const minHeadcount = existing ? Math.max(2, existing.participants.length) : 2
 
   const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
-  const canSubmit = !!me && title.trim().length > 0 && !!place?.name && !error
+  useEffect(() => {
+    if (existing?.coverImage) setCoverImage(existing.coverImage)
+  }, [existing?.id, existing?.coverImage])
+
+  const canSubmit = !!me && title.trim().length > 0 && !!place?.name && !error && !submitting
 
   function handleDateChange(nextDate: string) {
     setDate(nextDate)
@@ -139,8 +162,56 @@ export default function FundingForm() {
     setError(computeScheduleError(date, time, nextDeadline))
   }
 
-  function handleSubmit() {
-    if (!me || !canSubmit || !place) return
+  async function handleImageChange(file: File | null) {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      showToast('이미지 파일만 올릴 수 있어요', 'error')
+      return
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      showToast('이미지는 2MB 이하만 올릴 수 있어요', 'error')
+      return
+    }
+
+    // 로그인 시 서버 파일 저장, 실패/오프라인 시 data URL 폴백
+    if (getAccessToken()) {
+      setGlobalLoading(true, '이미지 업로드 중...')
+      try {
+        const url = await uploadImageApi(file)
+        setCoverImage(url)
+        showToast('사진을 서버에 올렸어요', 'success')
+        return
+      } catch {
+        showToast('서버 업로드 실패, 로컬 미리보기로 저장해요', 'info')
+      } finally {
+        setGlobalLoading(false)
+      }
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      if (!result) {
+        showToast('이미지를 읽지 못했어요', 'error')
+        return
+      }
+      if (result.length > 3_000_000) {
+        showToast('이미지가 너무 커요. 2MB 이하로 올려주세요', 'error')
+        return
+      }
+      setCoverImage(result)
+      showToast('사진을 추가했어요', 'success')
+    }
+    reader.onerror = () => showToast('이미지를 읽지 못했어요', 'error')
+    reader.readAsDataURL(file)
+  }
+
+  function clearImage() {
+    setCoverImage('')
+  }
+
+  async function handleSubmit() {
+    if (!me || !canSubmit || !place || submitting) return
     const scheduleError = computeScheduleError(date, time, deadline)
     if (scheduleError) {
       setError(scheduleError)
@@ -160,14 +231,24 @@ export default function FundingForm() {
       deadlineText: formatDeadlineText(deadline),
       targetCount: headcount,
       fee,
+      coverImage,
     }
 
-    if (editing && existing) {
-      updateFunding(existing.id, input)
-      navigate(`/funding/${existing.id}`, { replace: true })
-    } else {
-      createFunding({ ...input, hostEmail: me.email })
-      navigate('/myposts', { replace: true })
+    setSubmitting(true)
+    setGlobalLoading(true, editing ? '수정 중...' : '펀딩 만드는 중...')
+    try {
+      if (editing && existing) {
+        await updateFundingAsync(existing.id, input)
+        navigate(`/funding/${existing.id}`, { replace: true })
+      } else {
+        const newId = await createFundingAsync({ ...input, hostEmail: me.email })
+        navigate(`/funding/${newId}`, { replace: true })
+      }
+    } catch {
+      // 토스트는 actions에서 처리
+    } finally {
+      setSubmitting(false)
+      setGlobalLoading(false)
     }
   }
 
@@ -188,13 +269,49 @@ export default function FundingForm() {
       </header>
 
       <main className="flex-1 overflow-y-auto px-[16px] pb-[24px]">
-        <label className="mt-[16px] flex h-[132px] w-full cursor-pointer flex-col items-center justify-center gap-[8px] rounded-[4px] bg-[var(--hairline)]">
-          <input type="file" accept="image/*" className="hidden" />
-          <span className="flex size-[36px] items-center justify-center rounded-full bg-white text-[18px] text-[var(--label)]">
-            +
-          </span>
-          <span className="text-[13px] text-[var(--label)]">사진 추가</span>
-        </label>
+        {coverImage ? (
+          <div className="relative mt-[16px] h-[160px] w-full overflow-hidden rounded-[4px] bg-[var(--hairline)]">
+            <img src={coverImage} alt="펀딩 사진" className="h-full w-full object-cover" />
+            <div className="absolute right-[8px] top-[8px] flex gap-[6px]">
+              <label className="cursor-pointer rounded-[4px] bg-black/55 px-[10px] py-[6px] text-[12px] font-medium text-white">
+                변경
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  className="hidden"
+                  onChange={(e) => {
+                    handleImageChange(e.target.files?.[0] ?? null)
+                    e.target.value = ''
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={clearImage}
+                className="rounded-[4px] bg-black/55 px-[10px] py-[6px] text-[12px] font-medium text-white"
+              >
+                삭제
+              </button>
+            </div>
+          </div>
+        ) : (
+          <label className="mt-[16px] flex h-[132px] w-full cursor-pointer flex-col items-center justify-center gap-[8px] rounded-[4px] bg-[var(--hairline)]">
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              className="hidden"
+              onChange={(e) => {
+                handleImageChange(e.target.files?.[0] ?? null)
+                e.target.value = ''
+              }}
+            />
+            <span className="flex size-[36px] items-center justify-center rounded-full bg-white text-[18px] text-[var(--label)]">
+              +
+            </span>
+            <span className="text-[13px] text-[var(--label)]">사진 추가</span>
+            <span className="text-[11px] text-[var(--border)]">JPG, PNG, WEBP · 최대 2MB</span>
+          </label>
+        )}
 
         <p className="mt-[20px] text-[14px] font-bold text-[var(--heading)]">제목</p>
         <input
@@ -316,11 +433,17 @@ export default function FundingForm() {
         <button
           type="button"
           disabled={!canSubmit}
-          onClick={handleSubmit}
+          onClick={() => void handleSubmit()}
           className="flex h-[52px] flex-1 items-center justify-center rounded-[4px] bg-[var(--primary)] disabled:opacity-40"
         >
           <span className="text-[16px] font-medium text-[var(--on-primary)]">
-            {editing ? '수정 완료' : '펀딩 만들기'}
+            {submitting
+              ? editing
+                ? '수정 중...'
+                : '만드는 중...'
+              : editing
+                ? '수정 완료'
+                : '펀딩 만들기'}
           </span>
         </button>
       </div>

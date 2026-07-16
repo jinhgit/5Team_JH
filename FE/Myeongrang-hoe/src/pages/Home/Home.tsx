@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Map, CustomOverlayMap, MapMarker, ZoomControl } from 'react-kakao-maps-sdk'
 import BottomNav from '../../components/BottomNav'
@@ -15,28 +15,80 @@ import {
   getUser,
   isExpired,
   participantNamesOf,
+  syncFundingsFromServer,
+  syncMeFromServer,
   updateLastLocation,
 } from '../../store/actions'
 import { distanceKm, type LatLng } from '../../lib/geo'
-import { useKakao } from '../../lib/kakao'
+import { formatKakaoError, relayoutMap, useKakao } from '../../lib/kakao'
+import { filterBlockedFundingHost } from '../../store/moderation'
+import { pushableNotifications, wishlistAlmostFullItems } from '../../store/notifications'
+import { showToast } from '../../store/ui'
+import { notifyBrowser, requestNotificationPermission, notificationPermission } from '../../lib/browserNotify'
+import { clusterPoints } from '../../lib/mapCluster'
+import type { FundingRecord } from '../../store/schema'
 
 const MAP_HEIGHT = 343
+
+type RadiusMode = '1' | '3' | 'campus' | 'all'
+
+const RADIUS_OPTIONS: { key: RadiusMode; label: string; km: number }[] = [
+  { key: '1', label: '1km', km: 1 },
+  { key: '3', label: '3km', km: 3 },
+  { key: 'campus', label: '캠퍼스', km: 1.5 },
+  { key: 'all', label: '전체', km: 100 },
+]
 
 export default function Home() {
   const db = useDB()
   const me = getCurrentUser()
   const [kakaoLoading, kakaoError] = useKakao()
   const [mapInstance, setMapInstance] = useState<kakao.maps.Map | null>(null)
+  const [mapLevel, setMapLevel] = useState(6)
   const [myLocation, setMyLocation] = useState<LatLng | null>(null)
   const [usingFallback, setUsingFallback] = useState(false)
   const [locating, setLocating] = useState(true)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [refreshTick, setRefreshTick] = useState(0)
+  const [radiusMode, setRadiusMode] = useState<RadiusMode>('3')
+  const [tourPlaying, setTourPlaying] = useState(false)
+  const toastedWishlist = useRef(new Set<string>())
+  const tourTimer = useRef<number | null>(null)
+  const tourIndex = useRef(0)
 
   function locate() {
     setLocating(true)
     setRefreshTick((n) => n + 1)
   }
+
+  useEffect(() => {
+    void syncMeFromServer()
+  }, [])
+
+  // 찜 성사 임박 토스트 + 브라우저 알림
+  useEffect(() => {
+    if (!me) return
+    const items = wishlistAlmostFullItems(me.email)
+    for (const n of items) {
+      if (toastedWishlist.current.has(n.id)) continue
+      toastedWishlist.current.add(n.id)
+      showToast(n.title + ' · ' + n.body, 'info')
+      notifyBrowser(n.id, n.title, n.body, n.to)
+      break
+    }
+    for (const n of pushableNotifications(me.email)) {
+      if (n.kind === 'wishlist-almost') continue
+      notifyBrowser(n.id, n.title, n.body, n.to)
+    }
+  }, [me?.email, db.fundings, db.wishlist, db.reviews])
+
+  useEffect(() => {
+    void syncFundingsFromServer(
+      myLocation
+        ? { lat: myLocation.lat, lng: myLocation.lng, radiusKm: 100 }
+        : { lat: CAMPUS_CENTER.lat, lng: CAMPUS_CENTER.lng, radiusKm: 100 },
+    )
+  }, [myLocation?.lat, myLocation?.lng, refreshTick])
 
   useEffect(() => {
     let cancelled = false
@@ -59,8 +111,6 @@ export default function Home() {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }
-        // 데모용 더미 펀딩이 명지대 인문캠퍼스 주변에 고정되어 있어,
-        // 실제 위치가 캠퍼스에서 너무 멀면 기준 좌표로 대체한다.
         if (distanceKm(coords, CAMPUS_CENTER) > 5) {
           apply(CAMPUS_CENTER, true)
         } else {
@@ -78,27 +128,97 @@ export default function Home() {
   }, [refreshTick])
 
   const center = myLocation ?? CAMPUS_CENTER
+  const radiusKm = RADIUS_OPTIONS.find((r) => r.key === radiusMode)?.km ?? 3
+  const radiusCenter = radiusMode === 'campus' ? CAMPUS_CENTER : center
 
   const sorted = useMemo(() => {
-    return db.fundings
-      .map((f) => ({ ...f, distanceKm: distanceKm(center, { lat: f.lat, lng: f.lng }) }))
+    return filterBlockedFundingHost(db.fundings)
+      .map((f) => ({
+        ...f,
+        distanceKm: distanceKm(radiusCenter, { lat: f.lat, lng: f.lng }),
+      }))
       .sort((a, b) => a.distanceKm - b.distanceKm)
-  }, [center, db.fundings])
+  }, [radiusCenter.lat, radiusCenter.lng, db.fundings])
 
-  // 지도에는 항상 전체 펀딩이 다 보이도록 영역을 맞춘다 (하나라도 화면 밖으로 누락되지 않게)
-  // mapInstance는 <Map>의 onCreate가 비동기로 호출된 뒤에야 채워지므로, state로 두어야
-  // 맵이 준비된 시점에 이 effect가 다시 실행된다 (ref로는 재실행이 안 돼 마커 누락 버그가 났었음).
+  const nearbyFundings = useMemo(() => {
+    if (radiusMode === 'all') return sorted
+    return sorted.filter((f) => f.distanceKm <= radiusKm)
+  }, [sorted, radiusKm, radiusMode])
+
+  // 관심사 맞춤
+  const interestFundings = useMemo(() => {
+    if (!me?.interests?.length) return []
+    return filterBlockedFundingHost(db.fundings)
+      .filter((f) => me.interests.includes(f.category) && !isExpired(f))
+      .slice(0, 12)
+  }, [db.fundings, me?.interests])
+
+  const clusters = useMemo(() => {
+    return clusterPoints(
+      nearbyFundings.map((f) => ({ lat: f.lat, lng: f.lng, data: f })),
+      mapLevel,
+    )
+  }, [nearbyFundings, mapLevel])
+
   useEffect(() => {
-    if (!mapInstance || kakaoLoading || locating) return
+    if (!mapInstance || kakaoLoading || kakaoError) return
+    relayoutMap(mapInstance)
     const bounds = new kakao.maps.LatLngBounds()
     bounds.extend(new kakao.maps.LatLng(center.lat, center.lng))
-    sorted.forEach((f) => bounds.extend(new kakao.maps.LatLng(f.lat, f.lng)))
+    const pts = nearbyFundings.length > 0 ? nearbyFundings : sorted
+    pts.slice(0, 40).forEach((f) => bounds.extend(new kakao.maps.LatLng(f.lat, f.lng)))
     mapInstance.setBounds(bounds, 80, 40, 40, 40)
-  }, [sorted, center, kakaoLoading, locating, mapInstance])
+  }, [nearbyFundings, sorted, center, kakaoLoading, kakaoError, mapInstance, radiusMode])
 
-  const almostThere = sorted.find((f) => f.targetCount - currentCountOf(f) === 1)
+  useEffect(() => {
+    if (!mapInstance || !myLocation) return
+    mapInstance.setCenter(new kakao.maps.LatLng(myLocation.lat, myLocation.lng))
+    relayoutMap(mapInstance)
+  }, [mapInstance, myLocation?.lat, myLocation?.lng])
+
+  // 재생(투어) 정리
+  useEffect(() => {
+    return () => {
+      if (tourTimer.current) window.clearInterval(tourTimer.current)
+    }
+  }, [])
+
+  function toggleTour() {
+    if (!mapInstance) return
+    if (tourPlaying) {
+      if (tourTimer.current) window.clearInterval(tourTimer.current)
+      tourTimer.current = null
+      setTourPlaying(false)
+      return
+    }
+    const list = nearbyFundings.length > 0 ? nearbyFundings : sorted
+    if (list.length === 0) {
+      showToast('둘러볼 펀딩이 없어요', 'info')
+      return
+    }
+    setTourPlaying(true)
+    tourIndex.current = 0
+    const step = () => {
+      const f = list[tourIndex.current % list.length]
+      tourIndex.current += 1
+      mapInstance.setLevel(4)
+      mapInstance.panTo(new kakao.maps.LatLng(f.lat, f.lng))
+      setSelectedId(f.id)
+    }
+    step()
+    tourTimer.current = window.setInterval(step, 2200)
+  }
+
+  const almostThere = nearbyFundings.find((f) => f.targetCount - currentCountOf(f) === 1)
   const selected = sorted.find((f) => f.id === selectedId)
-  const showLoading = locating || kakaoLoading
+  const showSdkLoading = kakaoLoading
+  const showMapError = !kakaoLoading && !!kakaoError
+  const listItems = nearbyFundings.length > 0 ? nearbyFundings : sorted
+  const zoomPosition =
+    typeof kakao !== 'undefined' && kakao?.maps?.ControlPosition
+      ? kakao.maps.ControlPosition.RIGHT
+      : undefined
+  const perm = notificationPermission()
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-white">
@@ -107,52 +227,122 @@ export default function Home() {
       <main className="flex-1 overflow-y-auto">
         <div
           className="relative overflow-hidden bg-[var(--primary-tint)]"
-          style={{ height: MAP_HEIGHT }}
+          style={{ height: MAP_HEIGHT, minHeight: MAP_HEIGHT }}
         >
-          {showLoading && (
+          {showSdkLoading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--primary-tint)]">
-              <p className="text-[13px] font-medium text-[var(--label)]">
-                {kakaoError ? '지도를 불러오지 못했어요' : '내 위치와 지도를 불러오는 중...'}
-              </p>
+              <p className="text-[13px] font-medium text-[var(--label)]">지도를 불러오는 중...</p>
             </div>
           )}
 
-          {!showLoading && !kakaoError && (
+          {!kakaoError && (
             <Map
+              id="home-kakao-map"
               center={center}
+              isPanto
               level={6}
               style={{ width: '100%', height: '100%' }}
-              onCreate={setMapInstance}
+              onCreate={(map) => {
+                setMapInstance(map)
+                setMapLevel(map.getLevel())
+                requestAnimationFrame(() => {
+                  relayoutMap(map)
+                  window.setTimeout(() => relayoutMap(map), 100)
+                })
+              }}
+              onZoomChanged={(map) => setMapLevel(map.getLevel())}
             >
-              <ZoomControl position={kakao.maps.ControlPosition.RIGHT} />
+              {zoomPosition != null && <ZoomControl position={zoomPosition} />}
 
               <CustomOverlayMap position={center} yAnchor={0.5} xAnchor={0.5}>
                 <div className="size-[16px] rounded-full border-2 border-white bg-[var(--blue-deep)] shadow-[0px_0px_0px_6px_rgba(17,106,212,0.2)]" />
               </CustomOverlayMap>
 
-              {sorted.map((f) => (
-                <MapMarker
-                  key={f.id}
-                  position={{ lat: f.lat, lng: f.lng }}
-                  image={{ src: pin, size: { width: 32, height: 32 } }}
-                  onClick={() => setSelectedId(f.id)}
-                />
-              ))}
+              {clusters.map((c, i) => {
+                if (c.type === 'cluster') {
+                  return (
+                    <CustomOverlayMap key={`c-${i}`} position={{ lat: c.lat, lng: c.lng }} yAnchor={0.5} xAnchor={0.5}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!mapInstance) return
+                          mapInstance.setLevel(Math.max(1, mapInstance.getLevel() - 2))
+                          mapInstance.panTo(new kakao.maps.LatLng(c.lat, c.lng))
+                        }}
+                        className="flex size-[40px] items-center justify-center rounded-full border-2 border-white bg-[var(--primary-deep)] text-[13px] font-bold text-white shadow-md"
+                      >
+                        {c.count}
+                      </button>
+                    </CustomOverlayMap>
+                  )
+                }
+                const f = c.item as FundingRecord & { distanceKm?: number }
+                return (
+                  <MapMarker
+                    key={f.id}
+                    position={{ lat: c.lat, lng: c.lng }}
+                    image={{ src: pin, size: { width: 32, height: 32 } }}
+                    onClick={() => setSelectedId(f.id)}
+                  />
+                )
+              })}
             </Map>
           )}
 
+          {showMapError && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[var(--primary-tint)] px-[24px] text-center">
+              <p className="text-[14px] font-semibold text-[var(--heading)]">카카오맵을 불러오지 못했습니다</p>
+              <p className="mt-[8px] text-[12px] leading-[18px] text-[var(--label)]">
+                {formatKakaoError(kakaoError)}
+              </p>
+            </div>
+          )}
+
+          {/* 위치 버튼 */}
           <button
             type="button"
             aria-label="내 위치로 이동"
             onClick={locate}
-            className="absolute right-[18px] bottom-[16px] z-10"
+            className="absolute right-[18px] bottom-[68px] z-10"
           >
             <img src={locateBtn} alt="" className="size-[47px]" />
           </button>
 
-          {usingFallback && !showLoading && (
+          {/* 재생(주변 펀딩 투어) 버튼 — 흰 원 + 삼각형 */}
+          <button
+            type="button"
+            aria-label={tourPlaying ? '투어 중지' : '주변 펀딩 둘러보기'}
+            onClick={toggleTour}
+            className="absolute right-[18px] bottom-[16px] z-10 flex size-[47px] items-center justify-center rounded-full bg-white shadow-[0px_2px_10px_rgba(0,0,0,0.15)]"
+          >
+            {tourPlaying ? (
+              <span className="flex gap-[3px]">
+                <span className="h-[14px] w-[4px] rounded-sm bg-[var(--primary-deep)]" />
+                <span className="h-[14px] w-[4px] rounded-sm bg-[var(--primary-deep)]" />
+              </span>
+            ) : (
+              <span
+                className="ml-[3px] block"
+                style={{
+                  width: 0,
+                  height: 0,
+                  borderTop: '8px solid transparent',
+                  borderBottom: '8px solid transparent',
+                  borderLeft: '13px solid var(--primary-deep)',
+                }}
+              />
+            )}
+          </button>
+
+          {locating && !kakaoError && (
             <span className="absolute left-[17px] top-[13px] z-10 rounded-full bg-white/90 px-[11px] py-[5px] text-[11px] font-bold text-[var(--label)]">
-              데모 위치: 명지대 인문캠퍼스
+              위치 확인 중...
+            </span>
+          )}
+
+          {usingFallback && !locating && !kakaoError && (
+            <span className="absolute left-[17px] top-[13px] z-10 rounded-full bg-white/90 px-[11px] py-[5px] text-[11px] font-bold text-[var(--label)]">
+              기준 위치: 명지대 인문캠퍼스
             </span>
           )}
 
@@ -160,9 +350,9 @@ export default function Home() {
             <div className="absolute bottom-[16px] left-[17px] right-[75px] z-10 rounded-[4px] bg-white p-[13px] shadow-[0px_4px_13px_rgba(0,0,0,0.15)]">
               <p className="truncate text-[14px] font-bold text-[var(--heading)]">{selected.title}</p>
               <p className="text-[12px] text-[var(--label)]">
-                {selected.distanceKm < 1
-                  ? `${Math.round(selected.distanceKm * 1000)}m`
-                  : `${selected.distanceKm.toFixed(1)}km`}{' '}
+                {(selected.distanceKm ?? 0) < 1
+                  ? `${Math.round((selected.distanceKm ?? 0) * 1000)}m`
+                  : `${(selected.distanceKm ?? 0).toFixed(1)}km`}{' '}
                 · {currentCountOf(selected)}/{selected.targetCount}명
               </p>
               <Link
@@ -180,26 +370,99 @@ export default function Home() {
         </div>
 
         <div className="flex flex-col gap-[13px] px-[17px] pt-[13px] pb-[17px]">
-          <p className="text-[21px] font-bold text-[var(--heading)]">
-            내 주변 펀딩 {sorted.length > 0 && `(${sorted.length})`}
-          </p>
+          {/* 거리 필터 */}
+          <div className="flex flex-wrap gap-[8px]">
+            {RADIUS_OPTIONS.map((r) => (
+              <button
+                key={r.key}
+                type="button"
+                onClick={() => setRadiusMode(r.key)}
+                className={`rounded-full px-[12px] py-[7px] text-[12px] ${
+                  radiusMode === r.key
+                    ? 'bg-[var(--primary-deep)] font-bold text-white'
+                    : 'bg-[var(--hairline)] font-medium text-[var(--label)]'
+                }`}
+              >
+                {r.label}
+              </button>
+            ))}
+            {perm !== 'unsupported' && perm !== 'granted' && (
+              <button
+                type="button"
+                onClick={() => void requestNotificationPermission()}
+                className="rounded-full border border-[var(--primary-deep)] px-[12px] py-[7px] text-[12px] font-bold text-[var(--primary-deep)]"
+              >
+                알림 켜기
+              </button>
+            )}
+          </div>
+
+          {/* 관심사 맞춤 가로 스크롤 */}
+          {interestFundings.length > 0 && (
+            <div className="flex flex-col gap-[8px]">
+              <p className="text-[16px] font-bold text-[var(--heading)]">
+                내 관심 {me?.interests?.slice(0, 3).join(' · ')}
+              </p>
+              <div className="-mx-[17px] overflow-x-auto px-[17px]">
+                <div className="flex w-max gap-[10px] pb-[4px]">
+                  {interestFundings.map((g) => {
+                    const current = currentCountOf(g)
+                    return (
+                      <Link
+                        key={g.id}
+                        to={`/funding/${g.id}`}
+                        className="w-[200px] shrink-0 rounded-[8px] border border-[var(--border-card)] bg-white p-[12px] shadow-[0px_2px_8px_rgba(0,0,0,0.06)]"
+                      >
+                        <span className="text-[11px] font-bold text-[var(--primary-deep)]">{g.category}</span>
+                        <p className="mt-[4px] line-clamp-2 text-[14px] font-bold text-[var(--heading)]">
+                          {g.title}
+                        </p>
+                        <p className="mt-[6px] truncate text-[11px] text-[var(--label)]">
+                          {g.locationName} · {current}/{g.targetCount}명
+                        </p>
+                      </Link>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-[4px]">
+            <p className="text-[21px] font-bold text-[var(--heading)]">
+              내 주변 펀딩 {listItems.length > 0 ? `(${listItems.length})` : ''}
+            </p>
+            <p className="text-[12px] text-[var(--label)]">
+              {radiusMode === 'all'
+                ? '전체 펀딩을 가까운 순으로 보여줍니다.'
+                : radiusMode === 'campus'
+                  ? '명지대 인문캠퍼스 기준 1.5km 이내'
+                  : `기준 위치 ${radiusKm}km 이내 · 가까운 순`}
+            </p>
+          </div>
 
           {almostThere && (
             <div className="flex items-center gap-[11px] rounded-[4px] border border-[var(--primary-deep)] bg-[var(--primary-tint)] px-[15px] py-[13px]">
               <img src={nudgeIcon} alt="" className="size-[21px] shrink-0" />
               <p className="flex-1 text-[14px] font-bold text-[var(--heading)]">
-                딱 한 명만 더 모이면 "{almostThere.title}"가 오늘 저녁 바로 출발해요!
+                딱 한 명만 더 모이면 &quot;{almostThere.title}&quot;가 바로 출발해요!
               </p>
             </div>
           )}
 
-          {sorted.length === 0 && (
+          {listItems.length === 0 && (
             <p className="py-[24px] text-center text-[14px] text-[var(--border)]">
               아직 진행 중인 펀딩이 없어요
             </p>
           )}
 
-          {sorted.map((g) => {
+          {nearbyFundings.length === 0 && sorted.length > 0 && radiusMode !== 'all' && (
+            <p className="text-[13px] text-[var(--label)]">
+              반경 안에는 아직 펀딩이 없어서, 가까운 순으로 전체 펀딩을 보여드려요.
+            </p>
+          )}
+
+          {(nearbyFundings.length > 0 ? nearbyFundings : sorted).map((g) => {
             const current = currentCountOf(g)
             return (
               <GigCard
@@ -213,12 +476,16 @@ export default function Home() {
                   locationName: g.locationName,
                   progress: Math.round((current / g.targetCount) * 100),
                   participantNames: participantNamesOf(g),
+                  participantEmails: g.participants,
                   foot:
                     g.targetCount - current === 1
                       ? `${current}/${g.targetCount}명 · 목표 달성 임박`
                       : `${current}/${g.targetCount}명 참여`,
                   best: g.best,
                   expired: isExpired(g),
+                  coverImage: g.coverImage,
+                  lat: g.lat,
+                  lng: g.lng,
                 }}
                 to={`/funding/${g.id}`}
               />

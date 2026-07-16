@@ -14,6 +14,8 @@ export interface UserRecord {
   noShowCount: number
   participationCount: number
   loginable: boolean
+  /** 프로필 사진 data URL */
+  avatarImage?: string
   /** 마지막으로 확인된 위치 (홈 화면 접속 시 갱신, 넛지 알림 타겟팅에 사용) */
   lastLat?: number
   lastLng?: number
@@ -73,8 +75,16 @@ export interface FundingRecord {
   description: string
   hostEmail: string
   aiRisk: RiskLevel
+  /** data URL 또는 서버 업로드 URL (선택) */
+  coverImage?: string
 
   best?: boolean
+  /** 서버 matched 플래그 (호스트 확정 등) */
+  matched?: boolean
+  /** 호스트 조기 마감/취소 */
+  closed?: boolean
+  /** 성사 후 일정 확정 */
+  scheduleConfirmed?: boolean
   createdAt: number
 }
 

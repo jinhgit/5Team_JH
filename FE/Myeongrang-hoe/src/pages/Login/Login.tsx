@@ -1,10 +1,14 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { isEmailTaken, loginAsTestAccount, loginWithPassword } from '../../store/actions'
+import { applyServerUser, loginAsTestAccount, loginWithPassword } from '../../store/actions'
+import { loginWithApi, sendVerificationCode, setAccessToken, verifyEmailCode } from '../../lib/api'
+import { showToast } from '../../store/ui'
 import { TEST_ACCOUNTS } from '../../store/schema'
 import { patchDraft } from '../../store/signupDraft'
 
 type Mode = 'login' | 'signup'
+
+const SCHOOL_EMAIL_RE = /^[A-Za-z0-9._%+\-]+@([A-Za-z0-9-]+\.)+ac\.kr$/i
 
 export default function Login() {
   const navigate = useNavigate()
@@ -13,32 +17,103 @@ export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loginError, setLoginError] = useState('')
+  const [loggingIn, setLoggingIn] = useState(false)
 
   const [signupEmail, setSignupEmail] = useState('')
   const [code, setCode] = useState('')
   const [signupError, setSignupError] = useState('')
+  const [verificationMessage, setVerificationMessage] = useState('')
+  const [sendingCode, setSendingCode] = useState(false)
+  const [verifying, setVerifying] = useState(false)
 
-  function handleLogin() {
-    if (loginWithPassword(email, password)) {
+  async function handleLogin() {
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!normalizedEmail || !password) {
+      setLoginError('이메일과 비밀번호를 입력해주세요.')
+      return
+    }
+
+    setLoginError('')
+    setLoggingIn(true)
+    try {
+      const { user } = await loginWithApi(normalizedEmail, password)
+      applyServerUser(user, { password, setCurrent: true })
+      showToast('로그인했어요', 'success')
       navigate('/')
-    } else {
-      setLoginError('이메일 또는 비밀번호가 올바르지 않아요. 테스트 계정 버튼을 이용해보세요.')
+    } catch (error) {
+      // Fallback: local seed accounts when backend is offline
+      if (loginWithPassword(normalizedEmail, password)) {
+        setAccessToken(null)
+        showToast('오프라인 모드로 로그인했어요', 'info')
+        navigate('/')
+        return
+      }
+      setLoginError(error instanceof Error ? error.message : '로그인에 실패했어요.')
+    } finally {
+      setLoggingIn(false)
     }
   }
 
   function handleTestLogin(key: keyof typeof TEST_ACCOUNTS) {
+    setAccessToken(null)
     loginAsTestAccount(TEST_ACCOUNTS[key])
+    showToast('로컬 테스트 계정으로 입장했어요 (서버 미연동)', 'info')
     navigate('/')
   }
 
-  function handleVerify() {
-    if (isEmailTaken(signupEmail)) {
-      setSignupError('이미 가입된 이메일이에요. 로그인 탭을 이용해주세요.')
+  function isSchoolEmail(value: string) {
+    return SCHOOL_EMAIL_RE.test(value.trim())
+  }
+
+  async function handleSendCode() {
+    const normalizedEmail = signupEmail.trim().toLowerCase()
+    if (!normalizedEmail) {
+      setSignupError('학교 이메일을 입력해주세요.')
       return
     }
+    if (!isSchoolEmail(normalizedEmail)) {
+      setSignupError('학교 이메일 형식만 사용할 수 있어요. 예: example@mju.ac.kr')
+      return
+    }
+
     setSignupError('')
-    patchDraft({ email: signupEmail })
-    navigate('/signup/password')
+    setVerificationMessage('')
+    setSendingCode(true)
+
+    try {
+      const result = await sendVerificationCode(normalizedEmail)
+      const detail = result.code ? ` 테스트 모드에서는 인증번호 ${result.code} 를 입력할 수 있어요.` : ''
+      setVerificationMessage(`${result.message}${detail}`)
+    } catch (error) {
+      setSignupError(error instanceof Error ? error.message : '인증번호 전송에 실패했어요.')
+    } finally {
+      setSendingCode(false)
+    }
+  }
+
+  async function handleVerify() {
+    const normalizedEmail = signupEmail.trim().toLowerCase()
+    if (!normalizedEmail || !isSchoolEmail(normalizedEmail)) {
+      setSignupError('학교 이메일 형식만 사용할 수 있어요. 예: example@mju.ac.kr')
+      return
+    }
+    if (!code.trim()) {
+      setSignupError('인증번호를 입력해주세요.')
+      return
+    }
+
+    setSignupError('')
+    setVerifying(true)
+
+    try {
+      await verifyEmailCode(normalizedEmail, code.trim())
+      patchDraft({ email: normalizedEmail })
+      navigate('/signup/password')
+    } catch (error) {
+      setSignupError(error instanceof Error ? error.message : '인증에 실패했어요.')
+    } finally {
+      setVerifying(false)
+    }
   }
 
   return (
@@ -134,9 +209,12 @@ export default function Login() {
           <button
             type="button"
             onClick={handleLogin}
-            className="flex h-[52px] w-full items-center justify-center rounded-[4px] bg-[var(--primary)]"
+            disabled={loggingIn}
+            className="flex h-[52px] w-full items-center justify-center rounded-[4px] bg-[var(--primary)] disabled:opacity-40"
           >
-            <span className="text-[16px] font-medium text-[var(--on-primary)]">로그인</span>
+            <span className="text-[16px] font-medium text-[var(--on-primary)]">
+              {loggingIn ? '로그인 중...' : '로그인'}
+            </span>
           </button>
 
           <div className="h-[16px]" />
@@ -162,13 +240,19 @@ export default function Login() {
             />
             <button
               type="button"
-              className="shrink-0 rounded-[4px] border border-[var(--border)] px-[12px] py-[10px] text-[13px] font-medium text-[var(--heading)]"
+              onClick={handleSendCode}
+              disabled={sendingCode || !isSchoolEmail(signupEmail)}
+              className="shrink-0 rounded-[4px] border border-[var(--border)] px-[12px] py-[10px] text-[13px] font-medium text-[var(--heading)] disabled:opacity-40"
             >
-              인증번호 받기
+              {sendingCode ? '전송 중...' : '인증번호 받기'}
             </button>
           </div>
 
           <div className="h-[28px]" />
+
+          {verificationMessage && <p className="text-[12px] font-medium text-[var(--primary-deep)]">{verificationMessage}</p>}
+
+          <div className="h-[12px]" />
 
           <p className="text-[14px] font-bold text-[var(--heading)]">인증번호</p>
           <div className="h-[8px]" />
@@ -187,13 +271,15 @@ export default function Login() {
             </div>
             <button
               type="button"
-              className="shrink-0 rounded-[4px] border border-[var(--border)] px-[12px] py-[10px] text-[13px] font-medium text-[var(--heading)]"
+              onClick={handleVerify}
+              disabled={verifying}
+              className="shrink-0 rounded-[4px] border border-[var(--border)] px-[12px] py-[10px] text-[13px] font-medium text-[var(--heading)] disabled:opacity-40"
             >
-              확인
+              {verifying ? '확인 중...' : '확인'}
             </button>
           </div>
           <p className="pt-[6px] text-[11px] text-[var(--border)]">
-            데모에서는 아무 6자리 숫자나 입력하고 다음으로 진행할 수 있어요
+            인증번호 받기 버튼으로 발송된 숫자를 입력한 뒤 확인해주세요.
           </p>
           {signupError && <p className="pt-[6px] text-[12px] font-medium text-[var(--red)]">{signupError}</p>}
 
@@ -201,11 +287,13 @@ export default function Login() {
 
           <button
             type="button"
-            disabled={!signupEmail.includes('@')}
+            disabled={verifying || !signupEmail.trim() || !isSchoolEmail(signupEmail) || !code.trim()}
             onClick={handleVerify}
             className="flex h-[52px] w-full items-center justify-center rounded-[4px] bg-[var(--primary)] disabled:opacity-40"
           >
-            <span className="text-[16px] font-medium text-[var(--on-primary)]">인증하고 시작하기</span>
+            <span className="text-[16px] font-medium text-[var(--on-primary)]">
+              {verifying ? '확인 중...' : '인증하고 시작하기'}
+            </span>
           </button>
 
           <div className="h-[16px]" />

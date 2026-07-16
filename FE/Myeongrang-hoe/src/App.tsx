@@ -14,11 +14,17 @@ import InterestSelect from './pages/Signup/InterestSelect'
 import LocationPermission from './pages/Signup/LocationPermission'
 import ReviewForm from './pages/Review/ReviewForm'
 import Notifications from './pages/Notifications/Notifications'
+import AuthBootstrap from './components/AuthBootstrap'
 import RequireAuth from './components/RequireAuth'
+import ToastHost from './components/ToastHost'
+import OnboardingOverlay from './components/OnboardingOverlay'
 
 function App() {
   return (
     <BrowserRouter>
+      <AuthBootstrap>
+      <ToastHost />
+      <OnboardingOverlay />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/profile-setup" element={<ProfileSetup mode="signup" />} />
@@ -123,6 +129,7 @@ function App() {
           }
         />
       </Routes>
+      </AuthBootstrap>
     </BrowserRouter>
   )
 }

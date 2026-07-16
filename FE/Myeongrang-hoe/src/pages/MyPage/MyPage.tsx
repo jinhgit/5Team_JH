@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import BottomNav from '../../components/BottomNav'
 import GigCard from '../../components/GigCard'
 import PageHeader from '../../components/PageHeader'
-import profileAvatar from '../../assets/mypage/profile-avatar.svg'
 import sunlightIcon from '../../assets/mypage/sunlight-icon.svg'
+import UserAvatar from '../../components/UserAvatar'
 import reviewerAvatar from '../../assets/mypage/reviewer-avatar.svg'
 import { useDB } from '../../store/db'
 import {
@@ -17,6 +17,8 @@ import {
   logout,
   participantNamesOf,
   reviewsReceivedBy,
+  syncMeFromServer,
+  syncUserReviewsFromServer,
   wishlistOf,
 } from '../../store/actions'
 import { sunlightTier } from '../../lib/sunlight'
@@ -35,6 +37,13 @@ export default function MyPage() {
   useDB()
   const me = getCurrentUser()
   const [tab, setTab] = useState<Tab>('review')
+
+  useEffect(() => {
+    void syncMeFromServer().then(() => {
+      const email = getCurrentUser()?.email
+      if (email) void syncUserReviewsFromServer(email)
+    })
+  }, [])
 
   function handleLogout() {
     logout()
@@ -74,7 +83,7 @@ export default function MyPage() {
 
       <main className="flex-1 overflow-y-auto">
         <div className="flex flex-col items-center gap-[13px] border-b border-[var(--hairline)] px-[17px] pt-[26px] pb-[17px]">
-          <img src={profileAvatar} alt="" className="size-[77px]" />
+          <UserAvatar user={me} size={77} />
           <p className="text-[21px] font-bold text-[var(--heading)]">{me.name}</p>
           <span className="rounded-[12px] bg-[var(--primary-tint)] px-[11px] py-[4px] text-[11px] font-bold text-[var(--primary-deep)]">
             {me.campus} · {me.age}살
@@ -260,9 +269,13 @@ export default function MyPage() {
                     locationName: g.locationName,
                     progress: Math.round((current / g.targetCount) * 100),
                     participantNames: participantNamesOf(g),
+                    participantEmails: g.participants,
                     foot: `${current}/${g.targetCount}명 참여`,
                     best: g.best,
                     expired: isExpired(g),
+                    coverImage: g.coverImage,
+                    lat: g.lat,
+                    lng: g.lng,
                   }}
                   to={`/funding/${g.id}`}
                 />
