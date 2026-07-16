@@ -92,6 +92,20 @@ public class CommunityService {
     }
 
     @Transactional
+    public void deleteComment(Long fundingId, Long commentId, String email) {
+        requireFunding(fundingId);
+        Comment comment = commentRepository.findById(commentId)
+                .orElseThrow(() -> new IllegalArgumentException("댓글을 찾을 수 없어요."));
+        if (!comment.getFundingId().equals(fundingId)) {
+            throw new IllegalArgumentException("이 펀딩의 댓글이 아니에요.");
+        }
+        if (!comment.getAuthorEmail().equals(normalize(email))) {
+            throw new IllegalArgumentException("본인이 작성한 댓글만 삭제할 수 있어요.");
+        }
+        commentRepository.delete(comment);
+    }
+
+    @Transactional
     public Map<String, Object> submitReview(
             Long fundingId,
             String writerEmail,

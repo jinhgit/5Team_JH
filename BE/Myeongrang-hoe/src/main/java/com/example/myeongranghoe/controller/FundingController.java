@@ -10,6 +10,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -136,6 +137,19 @@ public class FundingController {
         return ResponseEntity.ok(Map.of(
                 "success", true,
                 "comment", communityService.addComment(id, email, body.content(), body.parentId())
+        ));
+    }
+
+    @DeleteMapping("/{id}/comments/{commentId}")
+    public ResponseEntity<Map<String, Object>> deleteComment(
+            @PathVariable Long id,
+            @PathVariable Long commentId
+    ) {
+        String email = UserContext.require();
+        communityService.deleteComment(id, commentId, email);
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "message", "댓글을 삭제했어요."
         ));
     }
 

@@ -1,6 +1,7 @@
 import {
   addCommentApi,
   confirmFundingApi,
+  deleteCommentApi,
   createFundingApi,
   fetchChat,
   fetchComments,
@@ -708,22 +709,83 @@ export function confirmFunding(fundingId: number) {
   }
 }
 
-export function addComment(fundingId: number, email: string, content: string, parentId?: number) {
+/**
+ * 댓글 등록. 서버 모드에서는 낙관적 추가 없이 API 응답만 반영해 중복을 막는다.
+ */
+export async function addComment(
+  fundingId: number,
+  email: string,
+  content: string,
+  parentId?: number,
+): Promise<void> {
+  const text = content.trim()
+  if (!text) return
+
+  if (getAccessToken()) {
+    try {
+      const c = await addCommentApi(fundingId, text, parentId)
+      mutate((d) => {
+        const exists = d.comments.some((x) => x.fundingId === fundingId && x.id === c.id)
+        if (exists) return
+        d.comments.push({
+          id: c.id,
+          fundingId: c.fundingId,
+          authorEmail: c.authorEmail,
+          content: c.content,
+          parentId: c.parentId ?? undefined,
+          createdAt: c.createdAt,
+        })
+        d.nextCommentId = Math.max(d.nextCommentId, c.id + 1)
+      })
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '댓글 작성에 실패했어요', 'error')
+      throw e
+    }
+    return
+  }
+
   mutate((d) => {
     d.comments.push({
       id: d.nextCommentId++,
       fundingId,
       authorEmail: email,
-      content,
+      content: text,
       parentId,
       createdAt: Date.now(),
     })
   })
-  if (getAccessToken()) {
-    void addCommentApi(fundingId, content, parentId)
-      .then(() => syncCommentsFromServer(fundingId))
-      .catch(() => {})
+}
+
+/** 본인 댓글만 삭제 */
+export async function deleteComment(
+  fundingId: number,
+  commentId: number,
+  authorEmail: string,
+): Promise<void> {
+  const me = getCurrentUser()
+  if (!me || me.email !== authorEmail) {
+    showToast('본인이 작성한 댓글만 삭제할 수 있어요', 'error')
+    throw new Error('본인이 작성한 댓글만 삭제할 수 있어요')
   }
+
+  if (getAccessToken()) {
+    try {
+      await deleteCommentApi(fundingId, commentId)
+      mutate((d) => {
+        d.comments = d.comments.filter((c) => !(c.fundingId === fundingId && c.id === commentId))
+      })
+      showToast('댓글을 삭제했어요', 'info')
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '댓글 삭제에 실패했어요', 'error')
+      throw e
+    }
+    return
+  }
+
+  mutate((d) => {
+    d.comments = d.comments.filter((c) => !(c.fundingId === fundingId && c.id === commentId))
+  })
+  showToast('댓글을 삭제했어요', 'info')
 }
 
 /**

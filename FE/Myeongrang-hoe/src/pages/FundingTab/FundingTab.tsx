@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type KeyboardEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Map, MapMarker } from 'react-kakao-maps-sdk'
 import HostDetailSheet from '../../components/HostDetailSheet'
@@ -9,6 +9,7 @@ import {
   commentsOf,
   confirmFunding,
   currentCountOf,
+  deleteComment,
   getCurrentUser,
   getFunding,
   getUser,
@@ -58,6 +59,8 @@ export default function FundingTab() {
 
   const [showHostDetail, setShowHostDetail] = useState(false)
   const [draft, setDraft] = useState('')
+  const [commentSending, setCommentSending] = useState(false)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
 
   useEffect(() => {
     const numId = Number(id)
@@ -66,11 +69,36 @@ export default function FundingTab() {
     }
   }, [id])
 
-  function handleAddComment() {
+  async function handleAddComment() {
     const content = draft.trim()
-    if (!content || !me) return
-    addComment(funding.id, me.email, content)
+    if (!content || !me || commentSending) return
+    setCommentSending(true)
     setDraft('')
+    try {
+      await addComment(funding.id, me.email, content)
+    } catch {
+      setDraft(content)
+    } finally {
+      setCommentSending(false)
+    }
+  }
+
+  function onCommentKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== 'Enter') return
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    e.preventDefault()
+    void handleAddComment()
+  }
+
+  async function handleDeleteComment(commentId: number, authorEmail: string) {
+    if (!me || me.email !== authorEmail || deletingId != null) return
+    if (!window.confirm('이 댓글을 삭제할까요?')) return
+    setDeletingId(commentId)
+    try {
+      await deleteComment(funding.id, commentId, authorEmail)
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   function handleJoin() {
@@ -288,15 +316,28 @@ export default function FundingTab() {
           <div className="flex flex-col gap-[15px] pt-[4px]">
             {comments.map((c) => {
               const author = getUser(c.authorEmail)
+              const mine = !!me && me.email === c.authorEmail
               return (
                 <div
-                  key={c.id}
+                  key={`${c.fundingId}-${c.id}`}
                   className={`flex items-start gap-[9px] ${c.parentId ? 'ml-[28px]' : ''}`}
                 >
                   <div className="size-[30px] shrink-0 rounded-full bg-[var(--hairline)]" />
                   <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
-                    <div className="flex items-center gap-[8px]">
-                      <p className="text-[14px] font-bold text-[var(--heading)]">{author?.name ?? '알 수 없음'}</p>
+                    <div className="flex items-center justify-between gap-[8px]">
+                      <p className="text-[14px] font-bold text-[var(--heading)]">
+                        {author?.name ?? '알 수 없음'}
+                      </p>
+                      {mine && (
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteComment(c.id, c.authorEmail)}
+                          disabled={deletingId === c.id}
+                          className="shrink-0 text-[12px] font-medium text-[var(--label)] disabled:opacity-40"
+                        >
+                          {deletingId === c.id ? '삭제 중...' : '삭제'}
+                        </button>
+                      )}
                     </div>
                     <p className="text-[14px] text-[var(--ink)]">{c.content}</p>
                   </div>
@@ -314,16 +355,18 @@ export default function FundingTab() {
                 type="text"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleAddComment()}
+                onKeyDown={onCommentKeyDown}
+                disabled={commentSending}
                 placeholder="일정이나 장소를 참여자들과 공유해보세요"
-                className="h-[40px] flex-1 rounded-full bg-[var(--hairline)] px-[16px] text-[14px] text-[var(--heading)] placeholder:text-[var(--label)] focus:outline-none"
+                className="h-[40px] flex-1 rounded-full bg-[var(--hairline)] px-[16px] text-[14px] text-[var(--heading)] placeholder:text-[var(--label)] focus:outline-none disabled:opacity-60"
               />
               <button
                 type="button"
-                onClick={handleAddComment}
-                className="shrink-0 rounded-[4px] border border-[var(--border-card)] px-[14px] py-[10px] text-[13px] font-bold text-[var(--heading)]"
+                onClick={() => void handleAddComment()}
+                disabled={commentSending || !draft.trim()}
+                className="shrink-0 rounded-[4px] border border-[var(--border-card)] px-[14px] py-[10px] text-[13px] font-bold text-[var(--heading)] disabled:opacity-40"
               >
-                등록
+                {commentSending ? '등록 중...' : '등록'}
               </button>
             </div>
           ) : (

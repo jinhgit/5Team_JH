@@ -363,6 +363,13 @@ export async function addCommentApi(
   return payload.comment as ApiComment
 }
 
+export async function deleteCommentApi(fundingId: number, commentId: number): Promise<void> {
+  const { response, payload } = await request(`/api/fundings/${fundingId}/comments/${commentId}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) throw new Error(errorMessage(payload, '댓글 삭제에 실패했어요.'))
+}
+
 export async function fetchFundingReviews(fundingId: number): Promise<ApiReview[]> {
   const { response, payload } = await request(`/api/fundings/${fundingId}/reviews`)
   if (!response.ok) throw new Error(errorMessage(payload, '후기를 불러오지 못했어요.'))
