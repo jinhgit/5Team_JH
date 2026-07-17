@@ -191,7 +191,7 @@ function seedDB(): DB {
   const hoursFromNow = (hours: number) => new Date(now + hours * 60 * 60 * 1000).toISOString()
 
   return {
-    version: 5,
+    version: 6,
     currentUserEmail: null,
     users,
     fundings: [
@@ -265,15 +265,7 @@ function seedDB(): DB {
         createdAt: now - 90 * 60 * 1000,
       },
     ],
-    comments: [
-      {
-        id: 1,
-        fundingId: 1,
-        authorEmail: 'test1@mju.ac.kr',
-        content: 'AI 넛지 확인용 데모 펀딩입니다. 목표 인원까지 1명 남았어요.',
-        createdAt: now - 20 * 60 * 1000,
-      },
-    ],
+    comments: [],
     chatMessages: [],
     reviews: [
       {
@@ -299,7 +291,7 @@ function seedDB(): DB {
     ],
     wishlist: {},
     nextFundingId: 4,
-    nextCommentId: 2,
+    nextCommentId: 1,
     nextChatId: 1,
     nextReviewId: 3,
   }
