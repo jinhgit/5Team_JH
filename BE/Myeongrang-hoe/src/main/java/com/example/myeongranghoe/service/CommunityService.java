@@ -143,9 +143,10 @@ public class CommunityService {
                 .orElseThrow(() -> new IllegalArgumentException("후기 대상 사용자를 찾을 수 없어요."));
         if (noShow) {
             targetUser.setNoShowCount(targetUser.getNoShowCount() + 1);
-            targetUser.setSunlightScore(Math.max(0, targetUser.getSunlightScore() - 20));
-        } else if (checklist != null && !checklist.isEmpty()) {
-            targetUser.setSunlightScore(Math.min(100, targetUser.getSunlightScore() + 4));
+            targetUser.setSunlightScore(clampSunlight(targetUser.getSunlightScore() - 20));
+        } else {
+            int delta = calculateReviewSunlightDelta(checklist, content);
+            targetUser.setSunlightScore(clampSunlight(targetUser.getSunlightScore() + delta));
         }
         userAccountRepository.save(targetUser);
 
@@ -234,5 +235,38 @@ public class CommunityService {
 
     private static String normalize(String email) {
         return email.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static int calculateReviewSunlightDelta(List<String> checklist, String content) {
+        int delta = 0;
+        if (checklist != null) {
+            for (String item : checklist) {
+                String normalized = item == null ? "" : item.trim();
+                if (normalized.isBlank()) {
+                    continue;
+                }
+                if (normalized.contains("시간")) {
+                    delta += 3;
+                } else if (normalized.contains("다시")) {
+                    delta += 3;
+                } else if (normalized.contains("친절")) {
+                    delta += 2;
+                } else if (normalized.contains("분위기")) {
+                    delta += 2;
+                } else if (normalized.contains("장소") || normalized.contains("안내")) {
+                    delta += 2;
+                } else {
+                    delta += 1;
+                }
+            }
+        }
+        if (content != null && content.trim().length() >= 10) {
+            delta += 1;
+        }
+        return Math.min(delta, 10);
+    }
+
+    private static int clampSunlight(int score) {
+        return Math.max(0, Math.min(100, score));
     }
 }
