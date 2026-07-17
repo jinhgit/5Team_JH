@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useKakao } from '../lib/kakao'
-import { CAMPUS_CENTER } from '../store/schema'
+import { getCurrentUser } from '../store/actions'
+import { getReferenceLocation } from '../lib/userLocation'
 
 export interface SelectedPlace {
   name: string
@@ -22,6 +23,7 @@ export default function LocationSearch({
   const [manualAddress, setManualAddress] = useState('')
   const [results, setResults] = useState<kakao.maps.services.PlacesSearchResult>([])
   const [searched, setSearched] = useState(false)
+  const bias = getReferenceLocation(getCurrentUser())
 
   function handleSearch() {
     const keyword = query.trim()
@@ -39,7 +41,8 @@ export default function LocationSearch({
         }
       },
       {
-        location: new kakao.maps.LatLng(CAMPUS_CENTER.lat, CAMPUS_CENTER.lng),
+        // 검색 우선순위: 내 저장 위치(또는 폴백) 근처
+        location: new kakao.maps.LatLng(bias.lat, bias.lng),
         sort: kakao.maps.services.SortBy.DISTANCE,
       },
     )
@@ -61,11 +64,12 @@ export default function LocationSearch({
     const name = manualName.trim()
     if (!name) return
 
+    // 지도 좌표를 못 얻을 때만 내 기준 위치(GPS 저장값 우선)로 대체 저장
     onSelect({
       name,
       address: manualAddress.trim() || name,
-      lat: CAMPUS_CENTER.lat,
-      lng: CAMPUS_CENTER.lng,
+      lat: bias.lat,
+      lng: bias.lng,
     })
     setManualName('')
     setManualAddress('')
@@ -121,7 +125,7 @@ export default function LocationSearch({
                 이 장소로 설정
               </button>
               <p className="text-[11px] text-[var(--border)]">
-                지도 좌표는 테스트용으로 명지대 인문캠퍼스 기준으로 저장됩니다.
+                지도 좌표를 못 찾을 때는 내 최근 위치(없으면 인문캠) 기준으로 저장됩니다.
               </p>
             </div>
           ) : (

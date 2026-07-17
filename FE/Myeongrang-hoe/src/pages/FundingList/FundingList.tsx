@@ -5,16 +5,19 @@ import PageHeader from '../../components/PageHeader'
 import { useDB } from '../../store/db'
 import {
   currentCountOf,
+  getCurrentUser,
   getUser,
   isClosed,
   isExpired,
   isMatched,
   participantNamesOf,
   syncFundingsFromServer,
+  updateLastLocation,
 } from '../../store/actions'
-import { CAMPUS_CENTER, FUNDING_CATEGORIES } from '../../store/schema'
+import { FUNDING_CATEGORIES } from '../../store/schema'
 import { filterBlockedFundingHost } from '../../store/moderation'
-import { distanceKm } from '../../lib/geo'
+import { distanceKm, type LatLng } from '../../lib/geo'
+import { acquireUserLocation, getReferenceLocation } from '../../lib/userLocation'
 
 const CATEGORIES = ['전체', ...FUNDING_CATEGORIES] as const
 type CategoryFilter = (typeof CATEGORIES)[number]
@@ -99,6 +102,7 @@ function endOfDay(d: Date) {
 
 export default function FundingList() {
   const db = useDB()
+  const me = getCurrentUser()
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<CategoryFilter>('전체')
   const [sort, setSort] = useState<SortKey>('latest')
@@ -109,20 +113,29 @@ export default function FundingList() {
   const hideExpired = statusFilter === 'expired' || statusFilter === 'both'
   const hideMatched = statusFilter === 'matched' || statusFilter === 'both'
   const [loading, setLoading] = useState(true)
+  const [origin, setOrigin] = useState<LatLng>(() => getReferenceLocation(me))
 
   useEffect(() => {
     let cancelled = false
-    void syncFundingsFromServer({
-      lat: CAMPUS_CENTER.lat,
-      lng: CAMPUS_CENTER.lng,
-      radiusKm: 100,
-    }).finally(() => {
+    void (async () => {
+      const { loc, source } = await acquireUserLocation({ user: me })
+      if (cancelled) return
+      setOrigin(loc)
+      if (me && source === 'gps') {
+        updateLastLocation(me.email, loc.lat, loc.lng)
+      }
+      await syncFundingsFromServer({
+        lat: loc.lat,
+        lng: loc.lng,
+        radiusKm: 100,
+      })
       if (!cancelled) setLoading(false)
-    })
+    })()
     return () => {
       cancelled = true
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.email])
 
   const filtered = useMemo(() => {
     const q = normalize(search)
@@ -150,12 +163,10 @@ export default function FundingList() {
       })
     }
 
-    // 거리
+    // 거리 (내 위치 우선 origin 기준)
     const radiusKm = radiusFilter === '1' ? 1 : radiusFilter === '3' ? 3 : null
     if (radiusKm != null) {
-      list = list.filter(
-        (g) => distanceKm(CAMPUS_CENTER, { lat: g.lat, lng: g.lng }) <= radiusKm,
-      )
+      list = list.filter((g) => distanceKm(origin, { lat: g.lat, lng: g.lng }) <= radiusKm)
     }
 
     if (tokens.length > 0) {
@@ -173,7 +184,7 @@ export default function FundingList() {
     const withMeta = list.map((g) => {
       const current = currentCountOf(g)
       const remaining = Math.max(0, g.targetCount - current)
-      const dist = distanceKm(CAMPUS_CENTER, { lat: g.lat, lng: g.lng })
+      const dist = distanceKm(origin, { lat: g.lat, lng: g.lng })
       return { g, current, remaining, dist }
     })
 
@@ -204,6 +215,8 @@ export default function FundingList() {
     freeOnly,
     hideExpired,
     hideMatched,
+    origin.lat,
+    origin.lng,
   ])
 
   return (

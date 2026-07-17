@@ -1,6 +1,6 @@
 import nudgeIcon from '../assets/home/nudge-icon.svg'
-import aiIcon from '../assets/fundingtab/ai-icon.svg'
 import chatNoteIcon from '../assets/fundingtab/chat-note-icon.svg'
+import { aiBrandLogo } from '../components/AiBrandMark'
 import { getDB } from './db'
 import { CAMPUS_CENTER, NUDGE_RADIUS_KM } from './schema'
 import { distanceKm } from '../lib/geo'
@@ -109,7 +109,7 @@ export function computeNotifications(email: string): NotificationItem[] {
           if (!wrote) {
             items.push({
               id: `review-remind-${f.id}`,
-              icon: aiIcon,
+              icon: aiBrandLogo,
               title: '후기를 남겨 햇살지수를 쌓아보세요',
               body: `"${f.title}" 모임은 어떠셨나요? 참여자에게 후기를 남겨주세요.`,
               createdAt: meetMs + 1,
@@ -146,7 +146,7 @@ export function computeNotifications(email: string): NotificationItem[] {
             : '주변 펀딩'
         items.push({
           id: `nudge-broadcast-${f.id}`,
-          icon: nudgeIcon,
+          icon: aiBrandLogo,
           title: wished ? '찜한 펀딩이 성사 임박!' : '딱 한 명만 더 모이면 출발해요!',
           body: f.nudgeMessage
             ? `${reason} · ${f.nudgeMessage}`
@@ -164,7 +164,7 @@ export function computeNotifications(email: string): NotificationItem[] {
     const writer = getUser(r.writerEmail)
     items.push({
       id: `review-${r.id}`,
-      icon: aiIcon,
+      icon: aiBrandLogo,
       title: '새로운 후기를 받았어요',
       body: `${writer?.name ?? '누군가'}님이 후기를 남겼어요.`,
       createdAt: r.createdAt,

@@ -6,7 +6,7 @@ import GigCard from '../../components/GigCard'
 import PageHeader from '../../components/PageHeader'
 import pin from '../../assets/home/pin.svg'
 import locateBtn from '../../assets/home/locate-btn.svg'
-import nudgeIcon from '../../assets/home/nudge-icon.svg'
+import AiBrandMark from '../../components/AiBrandMark'
 import { CAMPUS_CENTER } from '../../store/schema'
 import { useDB } from '../../store/db'
 import {
@@ -23,6 +23,12 @@ import {
   updateLastLocation,
 } from '../../store/actions'
 import { distanceKm, type LatLng } from '../../lib/geo'
+import {
+  acquireUserLocation,
+  locationSourceLabel,
+  resolveSavedLocation,
+  type LocationSource,
+} from '../../lib/userLocation'
 import { formatKakaoError, relayoutMap, useKakao } from '../../lib/kakao'
 import { filterBlockedFundingHost } from '../../store/moderation'
 import { pushableNotifications, wishlistAlmostFullItems } from '../../store/notifications'
@@ -48,7 +54,7 @@ export default function Home() {
   const [mapInstance, setMapInstance] = useState<kakao.maps.Map | null>(null)
   const [mapLevel, setMapLevel] = useState(6)
   const [myLocation, setMyLocation] = useState<LatLng | null>(null)
-  const [usingFallback, setUsingFallback] = useState(false)
+  const [locationSource, setLocationSource] = useState<LocationSource | null>(null)
   const [locating, setLocating] = useState(true)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [refreshTick, setRefreshTick] = useState(0)
@@ -97,41 +103,39 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false
 
-    function apply(loc: LatLng, fallback: boolean) {
+    async function run() {
+      // 로딩 중에도 지도가 비지 않도록 저장 위치를 먼저 깔아 둔다
+      const saved = resolveSavedLocation(me)
+      if (!cancelled && saved) {
+        setMyLocation(saved)
+        setLocationSource('saved')
+      }
+
+      const { loc, source } = await acquireUserLocation({
+        user: me,
+        timeoutMs: 8000,
+        maximumAgeMs: 30_000,
+        enableHighAccuracy: true,
+      })
       if (cancelled) return
       setMyLocation(loc)
-      setUsingFallback(fallback)
+      setLocationSource(source)
       setLocating(false)
-      if (me) updateLastLocation(me.email, loc.lat, loc.lng)
-    }
-
-    if (!navigator.geolocation) {
-      Promise.resolve().then(() => apply(CAMPUS_CENTER, true))
-      return () => {
-        cancelled = true
+      // GPS 성공 시에만 서버/프로필 갱신 (실패 폴백으로 캠퍼스·저장값을 덮지 않음)
+      if (me && source === 'gps') {
+        updateLastLocation(me.email, loc.lat, loc.lng)
       }
     }
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }
-        if (distanceKm(coords, CAMPUS_CENTER) > 5) {
-          apply(CAMPUS_CENTER, true)
-        } else {
-          apply(coords, false)
-        }
-      },
-      () => apply(CAMPUS_CENTER, true),
-      { timeout: 5000 },
-    )
-
+    void run()
     return () => {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshTick])
+  }, [refreshTick, me?.email])
 
-  const center = myLocation ?? CAMPUS_CENTER
+  const center = myLocation ?? resolveSavedLocation(me) ?? CAMPUS_CENTER
+  const fallbackLabel = locationSource ? locationSourceLabel(locationSource) : null
   const radiusKm = RADIUS_OPTIONS.find((r) => r.key === radiusMode)?.km ?? 3
 
   const sorted = useMemo(() => {
@@ -395,9 +399,9 @@ export default function Home() {
             </span>
           )}
 
-          {usingFallback && !locating && !kakaoError && (
+          {fallbackLabel && !locating && !kakaoError && (
             <span className="absolute left-[17px] top-[13px] z-10 rounded-full bg-white/90 px-[11px] py-[5px] text-[11px] font-bold text-[var(--label)]">
-              기준 위치: 명지대 인문캠퍼스
+              {fallbackLabel}
             </span>
           )}
 
@@ -559,7 +563,7 @@ export default function Home() {
 
           {almostThere && (
             <div className="flex items-center gap-[11px] rounded-[4px] border border-[var(--primary-deep)] bg-[var(--primary-tint)] px-[15px] py-[13px]">
-              <img src={nudgeIcon} alt="" className="size-[21px] shrink-0" />
+              <AiBrandMark className="h-[20px] w-auto shrink-0 object-contain object-left" />
               <p className="flex-1 text-[14px] font-bold text-[var(--heading)]">
                 {almostThere.nudgeMessage ??
                   `딱 한 명만 더 모이면 "${almostThere.title}"가 바로 출발해요!`}
