@@ -11,7 +11,7 @@ import {
   isMatched,
   syncFundingsFromServer,
 } from '../../store/actions'
-import { CAMPUS_CENTER } from '../../store/schema'
+import { getReferenceLocation } from '../../lib/userLocation'
 
 export default function MyPosts() {
   useDB()
@@ -22,9 +22,10 @@ export default function MyPosts() {
 
   useEffect(() => {
     let cancelled = false
+    const ref = getReferenceLocation(me)
     void syncFundingsFromServer({
-      lat: CAMPUS_CENTER.lat,
-      lng: CAMPUS_CENTER.lng,
+      lat: ref.lat,
+      lng: ref.lng,
       radiusKm: 100,
     }).finally(() => {
       if (!cancelled) setLoading(false)
@@ -32,7 +33,8 @@ export default function MyPosts() {
     return () => {
       cancelled = true
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.email])
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-white">

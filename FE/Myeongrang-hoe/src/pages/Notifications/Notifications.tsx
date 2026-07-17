@@ -9,7 +9,7 @@ import {
   syncMeFromServer,
 } from '../../store/actions'
 import { computeNotifications } from '../../store/notifications'
-import { CAMPUS_CENTER } from '../../store/schema'
+import { getReferenceLocation } from '../../lib/userLocation'
 
 function timeAgo(ts: number): string {
   const diffMin = Math.floor((Date.now() - ts) / 60000)
@@ -31,10 +31,11 @@ export default function Notifications() {
     let cancelled = false
     void (async () => {
       await syncMeFromServer()
+      const ref = getReferenceLocation(getCurrentUser())
       await syncFundingsFromServer({
-        lat: CAMPUS_CENTER.lat,
-        lng: CAMPUS_CENTER.lng,
-        radiusKm: 50,
+        lat: ref.lat,
+        lng: ref.lng,
+        radiusKm: 100,
       })
       if (!cancelled) setLoading(false)
     })()

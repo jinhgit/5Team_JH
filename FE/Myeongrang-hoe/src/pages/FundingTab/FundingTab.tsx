@@ -38,26 +38,68 @@ import { buildGoogleCalendarUrl, downloadIcs } from '../../lib/calendar'
 import shareBtn from '../../assets/fundingtab/share-btn.svg'
 import UserAvatar from '../../components/UserAvatar'
 import chatNoteIcon from '../../assets/fundingtab/chat-note-icon.svg'
-import aiIcon from '../../assets/fundingtab/ai-icon.svg'
 import infoIcon from '../../assets/fundingtab/info-icon.svg'
-import nudgeIcon from '../../assets/home/nudge-icon.svg'
+import AiBrandMark from '../../components/AiBrandMark'
 import { sunlightTier } from '../../lib/sunlight'
 import { blockUser, isBlocked } from '../../store/moderation'
+import { TEST_ACCOUNTS, type RiskLevel } from '../../store/schema'
 
-const riskCopy: Record<string, { label: string; body: string }> = {
+/**
+ * aiRisk: 노쇼 리스크 수준 (서버 값)
+ *  - 낮음 → 신뢰도 높음
+ *  - 중간 → 신뢰도 보통
+ *  - 높음 → 신뢰도 낮음
+ */
+const riskCopy: Record<
+  string,
+  {
+    label: string
+    body: string
+    /** 카드 배경 */
+    boxClass: string
+    /** 제목 색 */
+    titleClass: string
+    /** 로고 톤 (기본 남색 로고 → CSS filter로 재색) */
+    logoClass: string
+    /** 신뢰도 단계 (미리보기 라벨용) */
+    trustLabel: '높음' | '보통' | '낮음'
+  }
+> = {
   낮음: {
     label: 'AI 노쇼 리스크 분석 · 신뢰도 높음',
     body: '글의 구체성, 장소와 시간, 작성자 활동 이력을 함께 본 결과예요. 안심하고 참여해도 좋아요.',
+    // 기존 파란 tint 위에 밝은→진한 파랑 그라데이션
+    boxClass:
+      'bg-gradient-to-br from-[#ebf4ff] via-[#d9ebff] to-[#b9d6ff] shadow-[inset_0_0_0_1px_rgba(17,106,212,0.12)]',
+    titleClass: 'text-[var(--blue-deep)]',
+    logoClass: '',
+    trustLabel: '높음',
   },
   중간: {
     label: 'AI 노쇼 리스크 분석 · 신뢰도 보통',
     body: '분석할 이력이 아직 충분하지 않아요. 참여 전 댓글로 장소와 시간을 한 번 더 확인해보세요.',
+    // 기존 파란 반투명 박스 유지
+    boxClass: 'bg-[var(--blue-tint)]',
+    titleClass: 'text-[var(--blue-deep)]',
+    logoClass: '',
+    trustLabel: '보통',
   },
   높음: {
-    label: 'AI 노쇼 리스크 분석 · 노쇼 위험 높음',
+    label: 'AI 노쇼 리스크 분석 · 신뢰도 낮음',
     body: '노쇼 또는 취소 이력과 모임 정보 부족 요소가 감지됐어요. 신중하게 참여를 결정해주세요.',
+    // 파란 tint와 같은 톤의 빨간 반투명
+    boxClass: 'bg-[rgba(255,64,43,0.10)] shadow-[inset_0_0_0_1px_rgba(255,64,43,0.12)]',
+    titleClass: 'text-[var(--red)]',
+    // 남색 새싹 로고 → 브랜드 레드(#ff402b)에 가깝게
+    logoClass:
+      '[filter:brightness(0)_saturate(100%)_invert(28%)_sepia(96%)_saturate(2876%)_hue-rotate(349deg)_brightness(101%)_contrast(104%)]',
+    trustLabel: '낮음',
   },
 }
+
+/** 테스트 계정 미리보기: 신뢰도 높음 → 보통 → 낮음 순 */
+const RISK_PREVIEW_ORDER: RiskLevel[] = ['낮음', '중간', '높음']
+const TEST_EMAILS = new Set(Object.values(TEST_ACCOUNTS))
 
 export default function FundingTab() {
   const navigate = useNavigate()
@@ -82,6 +124,10 @@ export default function FundingTab() {
   const [draft, setDraft] = useState('')
   const [commentSending, setCommentSending] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  /** 테스트 계정 전용: AI 신뢰도 UI 미리보기 인덱스 (null이면 서버 aiRisk 사용) */
+  const [riskPreviewIndex, setRiskPreviewIndex] = useState<number | null>(null)
+
+  const isTestAccount = !!me && TEST_EMAILS.has(me.email)
 
   useEffect(() => {
     const numId = Number(id)
@@ -89,6 +135,11 @@ export default function FundingTab() {
       void syncFundingDetail(numId)
     }
   }, [id])
+
+  // 펀딩·계정 바뀌면 미리보기 초기화 (서버 값부터 시작)
+  useEffect(() => {
+    setRiskPreviewIndex(null)
+  }, [id, me?.email])
 
   async function handleAddComment() {
     const content = draft.trim()
@@ -192,7 +243,26 @@ export default function FundingTab() {
   const remaining = funding.targetCount - current
   const showNudge = !closed && !matched && remaining === 1
   const progress = Math.round((current / funding.targetCount) * 100)
-  const risk = riskCopy[funding.aiRisk]
+  const serverRiskKey: RiskLevel =
+    funding.aiRisk === '낮음' || funding.aiRisk === '중간' || funding.aiRisk === '높음'
+      ? funding.aiRisk
+      : '중간'
+  const serverRiskIndex = Math.max(0, RISK_PREVIEW_ORDER.indexOf(serverRiskKey))
+  const activeRiskIndex = isTestAccount
+    ? (riskPreviewIndex ?? serverRiskIndex)
+    : serverRiskIndex
+  const activeRiskKey = RISK_PREVIEW_ORDER[activeRiskIndex] ?? '중간'
+  const risk = riskCopy[activeRiskKey] ?? riskCopy['중간']
+
+  function cycleRiskPreview(delta: number) {
+    if (!isTestAccount) return
+    setRiskPreviewIndex((prev) => {
+      const base = prev ?? serverRiskIndex
+      const next = (base + delta + RISK_PREVIEW_ORDER.length) % RISK_PREVIEW_ORDER.length
+      return next
+    })
+  }
+
   const wishlisted = !!me && isWishlisted(me.email, funding.id)
   const comments = commentsOf(funding.id)
   const iAmHost = !!me && isHost(funding, me.email)
@@ -437,7 +507,7 @@ export default function FundingTab() {
 
           {showNudge && (
             <div className="flex w-full items-start gap-[11px] rounded-[4px] border border-[var(--primary-deep)] bg-[var(--primary-tint)] p-[15px]">
-              <img src={nudgeIcon} alt="" className="size-[21px] shrink-0" />
+              <AiBrandMark className="mt-[1px] h-[20px] w-auto shrink-0 object-contain object-left" />
               <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
                 <p className="text-[14px] font-bold text-[var(--primary-deep)]">AI 성사 임박 넛지</p>
                 <p className="text-[13px] text-[var(--label)]">{nudgeMessage}</p>
@@ -498,12 +568,46 @@ export default function FundingTab() {
             </div>
           )}
 
-          <div className="flex w-full items-start gap-[11px] rounded-[4px] bg-[var(--blue-tint)] p-[15px]">
-            <img src={aiIcon} alt="" className="size-[19px] shrink-0" />
+          <div
+            className={`flex w-full items-start gap-[8px] rounded-[4px] p-[15px] ${risk.boxClass}`}
+            data-ai-risk={activeRiskKey}
+            data-trust-level={
+              activeRiskKey === '낮음' ? 'high' : activeRiskKey === '높음' ? 'low' : 'medium'
+            }
+          >
+            {isTestAccount && (
+              <button
+                type="button"
+                aria-label="이전 신뢰도 미리보기"
+                onClick={() => cycleRiskPreview(-1)}
+                className={`mt-[2px] flex size-[28px] shrink-0 items-center justify-center rounded-full bg-white/70 text-[16px] font-bold shadow-sm ${risk.titleClass}`}
+              >
+                ‹
+              </button>
+            )}
+            <AiBrandMark
+              className={`mt-[1px] h-[20px] w-auto shrink-0 object-contain object-left ${risk.logoClass}`}
+            />
             <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
-              <p className="text-[14px] font-bold text-[var(--blue-deep)]">{risk.label}</p>
+              <p className={`text-[14px] font-bold ${risk.titleClass}`}>{risk.label}</p>
               <p className="text-[13px] text-[var(--label)]">{risk.body}</p>
+              {isTestAccount && (
+                <p className="mt-[4px] text-[11px] font-medium text-[var(--border)]">
+                  미리보기 {activeRiskIndex + 1}/{RISK_PREVIEW_ORDER.length} · 신뢰도 {risk.trustLabel}
+                  {activeRiskKey !== serverRiskKey ? ' (실제와 다름)' : ''}
+                </p>
+              )}
             </div>
+            {isTestAccount && (
+              <button
+                type="button"
+                aria-label="다음 신뢰도 미리보기"
+                onClick={() => cycleRiskPreview(1)}
+                className={`mt-[2px] flex size-[28px] shrink-0 items-center justify-center rounded-full bg-white/70 text-[16px] font-bold shadow-sm ${risk.titleClass}`}
+              >
+                ›
+              </button>
+            )}
           </div>
 
           <div className="my-[4px] h-[1px] w-full bg-[var(--hairline)]" />

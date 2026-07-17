@@ -12,8 +12,8 @@ import {
   syncChatFromServer,
   syncFundingsFromServer,
 } from '../../store/actions'
-import { CAMPUS_CENTER } from '../../store/schema'
 import { countUnreadChat } from '../../lib/chatRead'
+import { getReferenceLocation } from '../../lib/userLocation'
 
 const LIST_POLL_MS = 4000
 
@@ -26,9 +26,10 @@ export default function ChatList() {
 
   useEffect(() => {
     let cancelled = false
+    const ref = getReferenceLocation(me)
     void syncFundingsFromServer({
-      lat: CAMPUS_CENTER.lat,
-      lng: CAMPUS_CENTER.lng,
+      lat: ref.lat,
+      lng: ref.lng,
       radiusKm: 100,
     }).finally(() => {
       if (!cancelled) setLoading(false)
@@ -36,7 +37,8 @@ export default function ChatList() {
     return () => {
       cancelled = true
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.email])
 
   // 목록에서도 주기적으로 채팅 동기화 → 읽지 않음 배지 갱신
   useEffect(() => {

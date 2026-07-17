@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { getAccessToken, setAccessToken } from '../lib/api'
 import { isLoggedIn } from '../lib/auth'
 import { getCurrentUser, syncFundingsFromServer, syncMeFromServer } from '../store/actions'
-import { CAMPUS_CENTER } from '../store/schema'
+import { getReferenceLocation } from '../lib/userLocation'
 import LoadingScreen from './LoadingScreen'
 
 /**
@@ -25,10 +25,11 @@ export default function AuthBootstrap({ children }: { children: ReactNode }) {
       // 이미 로컬에 로그인 상태가 있으면 백그라운드로만 갱신
       if (isLoggedIn() && getCurrentUser()) {
         void syncMeFromServer()
+        const ref = getReferenceLocation(getCurrentUser())
         void syncFundingsFromServer({
-          lat: CAMPUS_CENTER.lat,
-          lng: CAMPUS_CENTER.lng,
-          radiusKm: 50,
+          lat: ref.lat,
+          lng: ref.lng,
+          radiusKm: 100,
         })
         if (!cancelled) setReady(true)
         return
@@ -38,10 +39,11 @@ export default function AuthBootstrap({ children }: { children: ReactNode }) {
       if (!ok) {
         setAccessToken(null)
       } else {
+        const ref = getReferenceLocation(getCurrentUser())
         void syncFundingsFromServer({
-          lat: CAMPUS_CENTER.lat,
-          lng: CAMPUS_CENTER.lng,
-          radiusKm: 50,
+          lat: ref.lat,
+          lng: ref.lng,
+          radiusKm: 100,
         })
       }
       if (!cancelled) setReady(true)
