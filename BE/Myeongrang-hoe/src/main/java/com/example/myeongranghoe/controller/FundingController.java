@@ -9,6 +9,8 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,6 +22,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -52,6 +58,113 @@ public class FundingController {
     @GetMapping("/{id}")
     public ResponseEntity<Map<String, Object>> get(@PathVariable Long id) {
         return ResponseEntity.ok(Map.of("success", true, "funding", fundingService.get(id)));
+    }
+
+    /**
+     * iPhone Safari 등에서 "캘린더에 추가" 시트로 열리도록
+     * Content-Type: text/calendar + Content-Disposition: inline
+     */
+    @GetMapping(value = "/{id}/calendar.ics", produces = "text/calendar")
+    public ResponseEntity<byte[]> calendarIcs(@PathVariable Long id) {
+        FundingResponse f = fundingService.get(id);
+        if (f.meetAt() == null || f.meetAt().isBlank()) {
+            throw new IllegalArgumentException("확정된 만남 일정이 없어요.");
+        }
+        Instant start = parseMeetAt(f.meetAt());
+        if (start == null) {
+            throw new IllegalArgumentException("만남 일정 형식을 해석할 수 없어요.");
+        }
+        Instant end = start.plus(2, ChronoUnit.HOURS);
+        String title = "[명랑회] " + nullToEmpty(f.title());
+        String location = joinLocation(f.locationName(), f.address());
+        String description = nullToEmpty(f.description());
+        String ics = buildIcs(id, title, description, location, start, end);
+        byte[] body = ics.getBytes(StandardCharsets.UTF_8);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"myeongrang-" + id + ".ics\"")
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .contentType(new MediaType("text", "calendar", StandardCharsets.UTF_8))
+                .body(body);
+    }
+
+    private static String buildIcs(
+            long id,
+            String title,
+            String description,
+            String location,
+            Instant start,
+            Instant end
+    ) {
+        String uid = "funding-" + id + "@myeongrang.hoe";
+        List<String> lines = new ArrayList<>();
+        lines.add("BEGIN:VCALENDAR");
+        lines.add("VERSION:2.0");
+        lines.add("PRODID:-//Myeongranghoe//Calendar//KO");
+        lines.add("CALSCALE:GREGORIAN");
+        lines.add("METHOD:PUBLISH");
+        lines.add("BEGIN:VEVENT");
+        lines.add("UID:" + uid);
+        lines.add("DTSTAMP:" + toUtcStamp(Instant.now()));
+        lines.add("DTSTART:" + toUtcStamp(start));
+        lines.add("DTEND:" + toUtcStamp(end));
+        lines.add("SUMMARY:" + escapeIcs(title));
+        if (!description.isBlank()) {
+            lines.add("DESCRIPTION:" + escapeIcs(description));
+        }
+        if (!location.isBlank()) {
+            lines.add("LOCATION:" + escapeIcs(location));
+        }
+        lines.add("STATUS:CONFIRMED");
+        lines.add("SEQUENCE:0");
+        lines.add("END:VEVENT");
+        lines.add("END:VCALENDAR");
+        return String.join("\r\n", lines);
+    }
+
+    private static Instant parseMeetAt(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String s = raw.trim().replace(" ", "T");
+        try {
+            return Instant.parse(s);
+        } catch (Exception ignored) {
+            // fall through
+        }
+        try {
+            return java.time.OffsetDateTime.parse(s).toInstant();
+        } catch (Exception ignored) {
+            // fall through
+        }
+        try {
+            return java.time.LocalDateTime.parse(s)
+                    .atZone(java.time.ZoneId.of("Asia/Seoul"))
+                    .toInstant();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String toUtcStamp(Instant instant) {
+        return instant.toString().replace("-", "").replace(":", "").replaceAll("\\.\\d+", "");
+    }
+
+    private static String escapeIcs(String s) {
+        return s.replace("\\", "\\\\")
+                .replace(";", "\\;")
+                .replace(",", "\\,")
+                .replace("\r\n", "\\n")
+                .replace("\n", "\\n");
+    }
+
+    private static String nullToEmpty(String s) {
+        return s == null ? "" : s.trim();
+    }
+
+    private static String joinLocation(String name, String address) {
+        String n = nullToEmpty(name);
+        String a = nullToEmpty(address);
+        if (n.isEmpty()) return a;
+        if (a.isEmpty() || a.equals(n)) return n;
+        return n + " · " + a;
     }
 
     @PostMapping

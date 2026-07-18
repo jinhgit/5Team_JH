@@ -34,7 +34,12 @@ import {
 import FundingCover from '../../components/FundingCover'
 import { useKakao } from '../../lib/kakao'
 import { shareFunding } from '../../lib/share'
-import { buildGoogleCalendarUrl, downloadIcs } from '../../lib/calendar'
+import {
+  addToDeviceCalendar,
+  buildGoogleCalendarUrl,
+  isAppleMobileDevice,
+} from '../../lib/calendar'
+import { API_BASE_URL } from '../../lib/api'
 import shareBtn from '../../assets/fundingtab/share-btn.svg'
 import UserAvatar from '../../components/UserAvatar'
 import chatNoteIcon from '../../assets/fundingtab/chat-note-icon.svg'
@@ -538,6 +543,35 @@ export default function FundingTab() {
                     {funding.scheduleConfirmed ? '일정 수정' : '일정 확정'}
                   </button>
                 )}
+                {funding.meetAt && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ok = addToDeviceCalendar(
+                        {
+                          title: `[명랑회] ${funding.title}`,
+                          description: funding.description,
+                          location: [funding.locationName, funding.address]
+                            .filter(Boolean)
+                            .join(' · '),
+                          start: funding.meetAt,
+                          fundingId: funding.id,
+                        },
+                        {
+                          filename: `myeongrang-${funding.id}.ics`,
+                          // 서버 .ics (inline) — iPhone Safari 가 캘린더 추가 시트 표시
+                          serverIcsUrl: `${API_BASE_URL}/api/fundings/${funding.id}/calendar.ics`,
+                        },
+                      )
+                      if (!ok) {
+                        window.alert('일정 정보를 캘린더로 열 수 없어요. 만남 시간을 확인해 주세요.')
+                      }
+                    }}
+                    className="rounded-[4px] bg-[var(--primary-deep)] px-[12px] py-[8px] text-[12px] font-bold text-white"
+                  >
+                    {isAppleMobileDevice() ? '아이폰 캘린더에 추가' : '캘린더에 추가 (.ics)'}
+                  </button>
+                )}
                 {funding.meetAt && calendarUrl && (
                   <a
                     href={calendarUrl}
@@ -547,22 +581,6 @@ export default function FundingTab() {
                   >
                     Google 캘린더
                   </a>
-                )}
-                {funding.meetAt && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      downloadIcs({
-                        title: `[명랑회] ${funding.title}`,
-                        description: funding.description,
-                        location: funding.locationName,
-                        start: funding.meetAt,
-                      })
-                    }
-                    className="rounded-[4px] border border-[var(--border-card)] px-[12px] py-[8px] text-[12px] font-medium text-[var(--heading)]"
-                  >
-                    .ics 저장
-                  </button>
                 )}
               </div>
             </div>
